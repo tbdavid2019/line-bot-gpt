@@ -53,7 +53,7 @@ async function handleEvent(event) {
     ]
     
     const completion = await openai.createChatCompletion({
-      model: 'gpt-4-o',
+      model: 'gpt-4o-mini',
       temperature: 1,
       messages: messages,
       max_tokens: 1000,
