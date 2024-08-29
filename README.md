@@ -80,7 +80,7 @@ PORT=8111
    ```
 
 
-2. 在 `.env` 文件中，您需要配置以下環境變數：
+2. 在 `.env` 文件中，您需要配置以下環境變數： (可以 mv example.env .env)
 
 In the `.env` file, you need to configure the following environment variables:
 
