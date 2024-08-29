@@ -7,6 +7,7 @@ const { Configuration, OpenAIApi } = require('openai')
 // 初始化 OpenAI 客戶端
 const configuration = new Configuration({
   apiKey: process.env.OPEN_AI_LINE_SECRET,
+  basePath: process.env.OPEN_AI_BASE_PATH || 'https://api.openai.com/v1', // 默認的 OpenAI API endpoint
 });
 const openai = new OpenAIApi(configuration);
 
@@ -44,7 +45,7 @@ async function handleEvent(event) {
     const messages = [
       {
         role: 'system',
-        content: 'You are a helpful assistant.',
+        content: 'You are a helpful assistant. 回覆請用繁體中文語言為主',
       },
       {
         role: 'user',
@@ -53,7 +54,7 @@ async function handleEvent(event) {
     ]
     
     const completion = await openai.createChatCompletion({
-      model: 'gpt-4o-mini',
+      model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini', // 默認使用 'gpt-4o-mini'，如果 .env 中未指定
       temperature: 1,
       messages: messages,
       max_tokens: 1000,
