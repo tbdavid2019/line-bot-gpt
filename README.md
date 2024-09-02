@@ -1,6 +1,18 @@
 
 # Line Bot with GPT Integration
 
+## 示範機器人 Demo Line Bot
+
+直接點選連結 加入 Line Bot 後使用
+https://liff.line.me/1645278921-kWRPP32q/?accountId=728wsrjq
+
+![image](https://github.com/user-attachments/assets/3cd099af-861f-45ea-92c3-5062a0f42142)
+![image](https://github.com/user-attachments/assets/61fbcb73-6cec-4827-9b89-450a33acce94)
+![image](https://github.com/user-attachments/assets/d9e418f1-36b5-447f-b3dc-1f72089910f1)
+
+
+
+
 ## 目錄 (Table of Contents)
 
 - [專案簡介 (Project Introduction)](#專案簡介-project-introduction)
