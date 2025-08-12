@@ -1,5 +1,5 @@
 # 使用最新的 Node.js LTS 版本
-FROM node:20
+FROM node:latest
 
 # 設置工作目錄
 WORKDIR /usr/src/app
