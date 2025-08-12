@@ -51,9 +51,47 @@ async function handleEvent(event) {
       const mentions = event.message.mention?.mentionees || []
       const botUserId = process.env.LINE_BOT_USER_ID // 需要在 .env 中設定機器人的 User ID
       
-      // 如果沒有 mention 或者沒有 @ 到機器人，則不回應
-      if (mentions.length === 0 || !mentions.some(mention => mention.userId === botUserId)) {
-        return Promise.resolve(null)
+      console.log('群組訊息 debug:', {
+        sourceType: event.source.type,
+        hasMention: mentions.length > 0,
+        mentionees: mentions,
+        botUserId: botUserId,
+        messageText: event.message.text
+      })
+      
+      // 如果沒有設定 LINE_BOT_USER_ID，則檢查訊息是否以機器人名稱開頭
+      if (!botUserId || !botUserId.startsWith('U')) {
+        // 備用方案：檢查訊息是否包含常見的機器人呼叫方式或 @ 符號
+        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲']
+        const hasValidTrigger = botTriggers.some(trigger => 
+          event.message.text.toLowerCase().includes(trigger.toLowerCase())
+        )
+        
+        console.log('使用備用觸發機制:', {
+          messageText: event.message.text,
+          hasValidTrigger: hasValidTrigger,
+          triggers: botTriggers
+        })
+        
+        if (!hasValidTrigger) {
+          return Promise.resolve(null)
+        }
+      } else {
+        // 如果沒有 mention 或者沒有 @ 到機器人，則不回應
+        // 檢查是否有任何 mention 是指向機器人的（包括 isSelf: true）
+        const botMentioned = mentions.some(mention => 
+          mention.userId === botUserId || mention.isSelf === true
+        )
+        
+        console.log('檢查機器人 mention:', {
+          botUserId: botUserId,
+          botMentioned: botMentioned,
+          mentions: mentions.map(m => ({ userId: m.userId, isSelf: m.isSelf }))
+        })
+        
+        if (!botMentioned) {
+          return Promise.resolve(null)
+        }
       }
     }
 
@@ -85,6 +123,21 @@ async function handleEvent(event) {
         },
       }
       return client.replyMessage(event.replyToken, buttons)
+    }
+
+    // Debug 指令
+    if (userInput === '機器人狀態' || userInput === 'bot status') {
+      const botUserId = process.env.LINE_BOT_USER_ID
+      const debugInfo = `機器人狀態資訊：
+- 來源類型：${event.source.type}
+- 機器人 User ID：${botUserId ? '已設定' : '未設定'}
+- 群組 ID：${event.source.groupId || '非群組'}
+- 用戶 ID：${event.source.userId || '群組訊息'}
+- 是否有 mention：${event.message.mention ? '是' : '否'}
+- 原始訊息：${event.message.text}`
+      
+      const echo = { type: 'text', text: debugInfo }
+      return client.replyMessage(event.replyToken, [echo])
     }
 
 
@@ -134,7 +187,7 @@ async function handleEvent(event) {
       const userId = event.source.userId || event.source.groupId || event.source.roomId
       userStates.set(userId, { state: 'waiting_qimen_question' })
       
-      const echo = { type: 'text', text: '請問您想要占卜什麼問題？\n例如：今天適合投資嗎？、這個工作機會好嗎？、感情狀況如何？' }
+      const echo = { type: 'text', text: '請問您想要占卜什麼問題？\n例如：今天適合投資嗎？、這個工作機會好嗎？、感情狀況如何？\n\n如要取消，請輸入「取消」或「退出」' }
       return client.replyMessage(event.replyToken, [echo])
     }
 
@@ -143,6 +196,13 @@ async function handleEvent(event) {
     const userState = userStates.get(userId)
     
     if (userState && userState.state === 'waiting_qimen_question') {
+      // 檢查是否要取消奇門遁甲
+      if (userInput === '取消' || userInput === '退出') {
+        userStates.delete(userId)
+        const echo = { type: 'text', text: '已取消奇門遁甲占卜。' }
+        return client.replyMessage(event.replyToken, [echo])
+      }
+      
       // 清除用戶狀態
       userStates.delete(userId)
       
