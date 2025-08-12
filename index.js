@@ -62,7 +62,7 @@ async function handleEvent(event) {
       // 如果沒有設定 LINE_BOT_USER_ID，則檢查訊息是否以機器人名稱開頭
       if (!botUserId || !botUserId.startsWith('U')) {
         // 備用方案：檢查訊息是否包含常見的機器人呼叫方式或 @ 符號
-        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲']
+        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲', '天氣特報']
         const hasValidTrigger = botTriggers.some(trigger => 
           event.message.text.toLowerCase().includes(trigger.toLowerCase())
         )
@@ -101,11 +101,33 @@ async function handleEvent(event) {
     if ((event.source.type === 'group' || event.source.type === 'room') && event.message.mention) {
       // 移除所有 @mention 的文字，只保留實際的訊息內容
       const mentions = event.message.mention.mentionees || []
+      
+      // 使用更精確的方式清理 mention 文字
       mentions.forEach(mention => {
-        // 移除 @顯示名稱 的部分
-        userInput = userInput.replace(new RegExp(`@[^\\s]+\\s*`, 'g'), '').trim()
+        // 取得 mention 的起始位置和長度
+        if (mention.index !== undefined && mention.length !== undefined) {
+          // 從原始訊息中移除 mention 部分
+          const beforeMention = event.message.text.substring(0, mention.index)
+          const afterMention = event.message.text.substring(mention.index + mention.length)
+          userInput = (beforeMention + afterMention).trim()
+        } else {
+          // 備用方法：使用正則表達式移除
+          userInput = userInput.replace(new RegExp(`@[^\\s]+`, 'g'), '').trim()
+        }
+      })
+      
+      // 額外清理可能殘留的特殊字符和多餘空格
+      userInput = userInput.replace(/^[-\s]+|[-\s]+$/g, '').trim()
+      userInput = userInput.replace(/\s+/g, ' ').trim() // 合併多個空格為一個
+      
+      console.log('群組訊息文字清理:', {
+        原始訊息: event.message.text,
+        清理後: userInput,
+        mentions: mentions.map(m => ({ index: m.index, length: m.length, userId: m.userId }))
       })
     }
+    
+    console.log('處理的用戶輸入:', userInput)
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -122,7 +144,22 @@ async function handleEvent(event) {
           ],
         },
       }
-      return client.replyMessage(event.replyToken, buttons)
+      
+      // 第二個按鈕組 - 天氣特報
+      const buttons2 = {
+        type: 'template',
+        altText: '更多服務',
+        template: {
+          type: 'buttons',
+          title: '天氣資訊',
+          text: '天氣相關服務',
+          actions: [
+            { label: '天氣特報', type: 'message', text: '天氣特報' }
+          ],
+        },
+      }
+      
+      return client.replyMessage(event.replyToken, [buttons, buttons2])
     }
 
     // Debug 指令
@@ -178,6 +215,184 @@ async function handleEvent(event) {
         return client.replyMessage(event.replyToken, [echo])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得淺草籤。' }
+        return client.replyMessage(event.replyToken, [echo])
+      }
+    }
+
+    if (userInput === '天氣特報') {
+      // 呼叫 台灣氣象署天氣特報 API
+      const url = 'https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-001?Authorization=CWA-AFB7BD45-6D32-4CA4-B619-D8BBC81B1ABA&format=JSON'
+      
+      try {
+        const response = await axios.get(url)
+        
+        if (response.status === 200 && response.data && response.data.records) {
+          const locations = response.data.records.location || []
+          
+          // 收集有特報的縣市
+          const alertLocations = []
+          locations.forEach(location => {
+            if (location.hazardConditions && 
+                location.hazardConditions.hazards && 
+                location.hazardConditions.hazards.length > 0) {
+              alertLocations.push(location)
+            }
+          })
+          
+          if (alertLocations.length === 0) {
+            const echo = { 
+              type: 'text', 
+              text: '🌤️ 目前沒有天氣特報\n\n台灣地區天氣狀況良好，請安心出行！' 
+            }
+            return client.replyMessage(event.replyToken, [echo])
+          }
+
+          // 如果特報太多，使用簡化的文字格式顯示所有特報
+          if (alertLocations.length > 10) {
+            let weatherReport = '⚠️ 天氣特報\n\n'
+            
+            alertLocations.forEach((location, index) => {
+              const hazard = location.hazardConditions.hazards[0]
+              const info = hazard.info
+              const startTime = new Date(hazard.validTime.startTime).toLocaleString('zh-TW', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+              const endTime = new Date(hazard.validTime.endTime).toLocaleString('zh-TW', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+              
+              // 選擇圖示
+              let emoji = '⚠️'
+              if (info.phenomena.includes('大雨')) emoji = '🌧️'
+              else if (info.phenomena.includes('強風')) emoji = '💨'
+              else if (info.phenomena.includes('高溫')) emoji = '🔥'
+              
+              weatherReport += `${emoji} ${location.locationName}：${info.phenomena}\n`
+              weatherReport += `📅 ${startTime} ~ ${endTime}\n\n`
+            })
+            
+            weatherReport += `📊 總計：${alertLocations.length} 個縣市有特報`
+            
+            const echo = { type: 'text', text: weatherReport }
+            return client.replyMessage(event.replyToken, [echo])
+          }
+
+          // 創建 Flex Message（限制卡片數量）
+          const flexMessage = {
+            type: 'flex',
+            altText: '天氣特報',
+            contents: {
+              type: 'carousel',
+              contents: []
+            }
+          }
+
+          // 最多顯示前 10 個特報（避免訊息過大）
+          const limitedLocations = alertLocations.slice(0, 10)
+          
+          limitedLocations.forEach(location => {
+            const hazard = location.hazardConditions.hazards[0]
+            const info = hazard.info
+            const validTime = hazard.validTime
+            
+            // 創建時間格式
+            const startTime = new Date(validTime.startTime).toLocaleString('zh-TW', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+            const endTime = new Date(validTime.endTime).toLocaleString('zh-TW', {
+              month: 'short',
+              day: 'numeric', 
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+
+            // 根據特報類型選擇顏色和圖示
+            let color = '#FF5733'
+            let emoji = '⚠️'
+            
+            if (info.phenomena.includes('大雨')) {
+              color = '#3498DB'
+              emoji = '🌧️'
+            } else if (info.phenomena.includes('強風')) {
+              color = '#9B59B6'
+              emoji = '💨'
+            } else if (info.phenomena.includes('高溫')) {
+              color = '#E67E22'
+              emoji = '🔥'
+            }
+
+            // 簡化 bubble 內容以減少大小
+            const bubble = {
+              type: 'bubble',
+              styles: {
+                header: {
+                  backgroundColor: color
+                }
+              },
+              header: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  {
+                    type: 'text',
+                    text: `${emoji} ${location.locationName}`,
+                    color: '#FFFFFF',
+                    weight: 'bold',
+                    size: 'lg'
+                  }
+                ]
+              },
+              body: {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'md',
+                contents: [
+                  {
+                    type: 'text',
+                    text: info.phenomena,
+                    weight: 'bold',
+                    size: 'lg',
+                    color: color
+                  },
+                  {
+                    type: 'text',
+                    text: `開始：${startTime}`,
+                    wrap: true,
+                    color: '#666666',
+                    size: 'sm'
+                  },
+                  {
+                    type: 'text',
+                    text: `結束：${endTime}`,
+                    wrap: true,
+                    color: '#666666',
+                    size: 'sm'
+                  }
+                ]
+              }
+            }
+            
+            flexMessage.contents.contents.push(bubble)
+          })
+
+          return client.replyMessage(event.replyToken, [flexMessage])
+          
+        } else {
+          const echo = { type: 'text', text: '抱歉，無法取得天氣特報資訊。' }
+          return client.replyMessage(event.replyToken, [echo])
+        }
+      } catch (error) {
+        console.error('天氣特報 API 錯誤:', error)
+        const echo = { type: 'text', text: '抱歉，天氣特報服務目前無法使用。' }
         return client.replyMessage(event.replyToken, [echo])
       }
     }
