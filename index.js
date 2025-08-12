@@ -21,6 +21,9 @@ const config = {
 // create LINE SDK client
 const client = new line.Client(config)
 
+// 用戶狀態管理（簡單的記憶體存儲）
+const userStates = new Map()
+
 // create Express app
 const app = express()
 
@@ -42,7 +45,29 @@ async function handleEvent(event) {
       return Promise.resolve(null)
     }
 
-    const userInput = event.message.text.trim()
+    // 檢查是否為群組訊息，如果是群組訊息且沒有被 @，則不回應
+    if (event.source.type === 'group' || event.source.type === 'room') {
+      // 檢查訊息中是否包含 mention（@機器人）
+      const mentions = event.message.mention?.mentionees || []
+      const botUserId = process.env.LINE_BOT_USER_ID // 需要在 .env 中設定機器人的 User ID
+      
+      // 如果沒有 mention 或者沒有 @ 到機器人，則不回應
+      if (mentions.length === 0 || !mentions.some(mention => mention.userId === botUserId)) {
+        return Promise.resolve(null)
+      }
+    }
+
+    let userInput = event.message.text.trim()
+    
+    // 如果是群組訊息且有 mention，移除 @機器人 的部分
+    if ((event.source.type === 'group' || event.source.type === 'room') && event.message.mention) {
+      // 移除所有 @mention 的文字，只保留實際的訊息內容
+      const mentions = event.message.mention.mentionees || []
+      mentions.forEach(mention => {
+        // 移除 @顯示名稱 的部分
+        userInput = userInput.replace(new RegExp(`@[^\\s]+\\s*`, 'g'), '').trim()
+      })
+    }
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -54,7 +79,8 @@ async function handleEvent(event) {
           actions: [
             { label: '解答之書', type: 'message', text: '解答之書' },
             { label: '唐詩', type: 'message', text: '唐詩' },
-            { label: '淺草籤', type: 'message', text: '淺草籤' }
+            { label: '淺草籤', type: 'message', text: '淺草籤' },
+            { label: '奇門遁甲', type: 'message', text: '奇門遁甲' }
           ],
         },
       }
@@ -99,6 +125,51 @@ async function handleEvent(event) {
         return client.replyMessage(event.replyToken, [echo])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得淺草籤。' }
+        return client.replyMessage(event.replyToken, [echo])
+      }
+    }
+
+    if (userInput === '奇門遁甲') {
+      // 設定用戶狀態為等待奇門遁甲問題
+      const userId = event.source.userId || event.source.groupId || event.source.roomId
+      userStates.set(userId, { state: 'waiting_qimen_question' })
+      
+      const echo = { type: 'text', text: '請問您想要占卜什麼問題？\n例如：今天適合投資嗎？、這個工作機會好嗎？、感情狀況如何？' }
+      return client.replyMessage(event.replyToken, [echo])
+    }
+
+    // 檢查用戶是否正在進行奇門遁甲占卜
+    const userId = event.source.userId || event.source.groupId || event.source.roomId
+    const userState = userStates.get(userId)
+    
+    if (userState && userState.state === 'waiting_qimen_question') {
+      // 清除用戶狀態
+      userStates.delete(userId)
+      
+      try {
+        // 呼叫奇門遁甲 API
+        const qimenResponse = await axios.post('https://qi.david888.com/api/qimen-question', {
+          question: userInput,
+          mode: 'advanced',
+          purpose: '綜合'
+        }, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        if (qimenResponse.status === 200 && qimenResponse.data && qimenResponse.data.success) {
+          const answer = qimenResponse.data.answer || '無法取得占卜結果'
+          const qimenText = `奇門遁甲占卜如下：\n\n問題：${qimenResponse.data.question}\n\n${answer}`
+          const echo = { type: 'text', text: qimenText }
+          return client.replyMessage(event.replyToken, [echo])
+        } else {
+          const echo = { type: 'text', text: '抱歉，目前無法取得奇門遁甲占卜結果。' }
+          return client.replyMessage(event.replyToken, [echo])
+        }
+      } catch (error) {
+        console.error('奇門遁甲 API 錯誤:', error)
+        const echo = { type: 'text', text: '抱歉，奇門遁甲服務目前無法使用。' }
         return client.replyMessage(event.replyToken, [echo])
       }
     }

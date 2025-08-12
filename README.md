@@ -80,9 +80,14 @@ In the `.env` file, you need to configure the following environment variables:
 ```bash
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_CHANNEL_SECRET=your_line_channel_secret
+LINE_BOT_USER_ID=your_line_bot_user_id
 OPEN_AI_LINE_SECRET=your_openai_api_key
 PORT=8111
 ```
+
+**重要提醒：** 為了讓機器人在群組中只對被 @ 提及的訊息回應，您需要設定 `LINE_BOT_USER_ID`。這個 ID 可以在 LINE Developers Console 的機器人設定頁面找到。
+
+**Important Note:** To make the bot respond only to messages where it's mentioned (@) in groups, you need to set `LINE_BOT_USER_ID`. This ID can be found in the bot settings page of the LINE Developers Console.
 
 ## 安裝與執行 (Installation and Running) (方法2)
 
@@ -101,6 +106,7 @@ In the `.env` file, you need to configure the following environment variables:
 ```bash
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_CHANNEL_SECRET=your_line_channel_secret
+LINE_BOT_USER_ID=your_line_bot_user_id
 OPEN_AI_LINE_SECRET=your_openai_api_key
 PORT=8111
 ```   
