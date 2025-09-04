@@ -10,6 +10,24 @@ const mime = require('mime')
 const fs = require('fs')
 const path = require('path')
 
+// 輔助函數：從 MIME 類型取得檔案副檔名
+function getFileExtensionFromMimeType(mimeType) {
+  // 直接使用 MIME 類型對照表，不依賴 mime 套件
+  const mimeToExt = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg', 
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+    'image/svg+xml': 'svg',
+    'image/tiff': 'tiff',
+    'image/avif': 'avif'
+  };
+  
+  return mimeToExt[mimeType] || 'jpg';
+}
+
 // 初始化 OpenAI 客戶端
 const configuration = new Configuration({
   apiKey: process.env.OPEN_AI_LINE_SECRET,
@@ -157,14 +175,19 @@ async function uploadImageToGCS(buffer, mimeType, prompt) {
       return null;
     }
     
-    // 生成檔案名
-    const fileExtension = mime.getExtension(mimeType) || 'jpg';
-    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 50);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `generated_images/${timestamp}_${cleanPrompt}.${fileExtension}`;
+    // 生成檔案名（參考 Python 版本的做法）
+    const fileExtension = getFileExtensionFromMimeType(mimeType);
+    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 30);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').substring(0, 15);
+    const uniqueFilename = `linebot_images/${timestamp}_${cleanPrompt}.${fileExtension}`;
+    
+    console.log(`Generated unique filename: ${uniqueFilename}`);
     
     // 上傳到 Google Cloud Storage
-    const file = bucket.file(fileName);
+    const file = bucket.file(uniqueFilename);
+    
+    console.log(`Creating blob in bucket: ${bucket.name}`);
+    console.log('Starting upload to GCS...');
     
     await file.save(buffer, {
       metadata: {
@@ -177,17 +200,27 @@ async function uploadImageToGCS(buffer, mimeType, prompt) {
       }
     });
     
-    // 設定檔案為公開可讀
-    await file.makePublic();
+    console.log(`Upload completed successfully with content_type: ${mimeType}`);
     
-    // 返回公開 URL
-    const publicUrl = `https://storage.googleapis.com/${process.env.GOOGLE_CLOUD_BUCKET_NAME}/${fileName}`;
+    // 對於啟用了 uniform bucket-level access 的 bucket，
+    // 我們不需要呼叫 makePublic()，而是直接使用公開 URL
+    console.log('Generating public URL (uniform bucket-level access enabled)...');
     
+    // 直接構建公開 URL，確保正確編碼（如 Python 版本）
+    const encodedFilename = encodeURIComponent(uniqueFilename).replace(/%2F/g, '/');
+    const publicUrl = `https://storage.googleapis.com/${process.env.GOOGLE_CLOUD_BUCKET_NAME}/${encodedFilename}`;
+    
+    // 檢查檔案是否存在（如 Python 版本）
+    const exists = await file.exists();
     console.log(`✅ 圖片已上傳至 Google Cloud Storage: ${publicUrl}`);
+    console.log(`Blob exists: ${exists[0]}`);
+    
     return publicUrl;
     
   } catch (error) {
     console.error('上傳至 Google Cloud Storage 失敗:', error);
+    console.error(`Exception type: ${error.constructor.name}`);
+    console.error(`Traceback: ${error.stack}`);
     return null;
   }
 }
@@ -202,7 +235,7 @@ async function saveImageLocally(buffer, mimeType, prompt) {
     }
     
     // 生成檔案名（使用時間戳和清理過的提示詞）
-    const fileExtension = mime.getExtension(mimeType) || 'jpg';
+    const fileExtension = getFileExtensionFromMimeType(mimeType);
     const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 50);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `${timestamp}_${cleanPrompt}.${fileExtension}`;
@@ -303,7 +336,7 @@ async function uploadImageToLine(buffer, mimeType) {
     }
     
     // 生成臨時檔案名
-    const fileExtension = mime.getExtension(mimeType) || 'jpg';
+    const fileExtension = getFileExtensionFromMimeType(mimeType);
     const fileName = `generated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
     const tempFilePath = path.join(tempDir, fileName);
     
