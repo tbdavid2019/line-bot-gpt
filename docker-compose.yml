@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  line-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: line-bot-gpt
+    restart: unless-stopped
+    ports:
+      - "8111:8111"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    volumes:
+      # Google Cloud 金鑰檔案（必須，如果使用 Google Cloud Storage）
+      - ./service-account-key.json:/usr/src/app/service-account-key.json:ro
+      # 持久化圖片存儲（本地備用方案）
+      - ./images:/usr/src/app/images
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8111/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 如果需要使用資料庫或其他服務，可以在這裡添加
+# services:
+#   redis:
+#     image: redis:alpine
+#     restart: unless-stopped
+#     ports:
+#       - "6379:6379"

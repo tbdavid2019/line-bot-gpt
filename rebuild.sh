@@ -7,8 +7,34 @@ sudo docker run -dp 8111:8111 \
   line-bot-gpt
 
 
-# 停止並刪除舊的容器
-docker stop line-bot-gpt  && docker rm line-bot-gpt
+#!/bin/bash
+
+# 停止現有容器
+echo "停止現有容器..."
+docker-compose down
+
+# 清理舊的映像（可選）
+echo "清理舊的映像..."
+docker image prune -f
+
+# 重新建置映像
+echo "重新建置映像..."
+docker-compose build --no-cache
+
+# 啟動容器
+echo "啟動容器..."
+docker-compose up -d
+
+# 顯示容器狀態
+echo "容器狀態："
+docker-compose ps
+
+# 顯示日誌
+echo "最新日誌："
+docker-compose logs --tail=50 line-bot
+
+echo "部署完成！"
+echo "健康檢查: curl http://localhost:8111/health"
 # 刪除無用的舊 image
 docker image prune -f
 

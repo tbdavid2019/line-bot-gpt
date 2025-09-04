@@ -1,18 +1,29 @@
 {
     "name": "line-bot",
-    "version": "1.0.0",
+    "version": "1.2.1",
     "main": "index.js",
     "scripts": {
-      "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "start": "node index.js",
+        "test-image": "node test_image_generation.js"
     },
-    "keywords": [],
+    "keywords": [
+        "line-bot",
+        "chatbot",
+        "openai",
+        "gemini",
+        "image-generation"
+    ],
     "author": "",
     "license": "ISC",
-    "description": "",
+    "description": "A LINE Bot with ChatGPT and Gemini image generation capabilities",
     "dependencies": {
-      "express": "^4.17.1",
-      "@line/bot-sdk": "^7.4.0",
-      "dotenv": "^8.2.0",
-      "openai": "^3.1.0"
+        "@google-cloud/storage": "^7.17.0",
+        "@google/genai": "^1.17.0",
+        "@line/bot-sdk": "^7.4.0",
+        "dotenv": "^8.2.0",
+        "express": "^4.17.1",
+        "mime": "^4.0.7",
+        "openai": "^3.1.0"
     }
-  }
+}

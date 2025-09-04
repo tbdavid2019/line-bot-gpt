@@ -4,6 +4,11 @@ const express = require('express')
 const line = require('@line/bot-sdk')
 const { Configuration, OpenAIApi } = require('openai')
 const axios = require('axios')
+const { GoogleGenAI } = require('@google/genai')
+const { Storage } = require('@google-cloud/storage')
+const mime = require('mime')
+const fs = require('fs')
+const path = require('path')
 
 // 初始化 OpenAI 客戶端
 const configuration = new Configuration({
@@ -11,6 +16,28 @@ const configuration = new Configuration({
   basePath: process.env.OPEN_AI_BASE_PATH || 'https://api.openai.com/v1', // 默認的 OpenAI API endpoint
 });
 const openai = new OpenAIApi(configuration);
+
+// 初始化 Google GenAI 客戶端
+const genAI = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+
+// 初始化 Google Cloud Storage 客戶端
+let storage = null;
+let bucket = null;
+
+if (process.env.GOOGLE_CLOUD_PROJECT_ID && process.env.GOOGLE_CLOUD_BUCKET_NAME) {
+  try {
+    storage = new Storage({
+      projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
+      keyFilename: process.env.GOOGLE_CLOUD_KEY_FILE, // 可選，如果使用 service account JSON 檔案
+    });
+    bucket = storage.bucket(process.env.GOOGLE_CLOUD_BUCKET_NAME);
+    console.log('✅ Google Cloud Storage 已初始化');
+  } catch (error) {
+    console.error('❌ Google Cloud Storage 初始化失敗:', error.message);
+  }
+}
 
 // create LINE SDK config from env variables
 const config = {
@@ -24,8 +51,343 @@ const client = new line.Client(config)
 // 用戶狀態管理（簡單的記憶體存儲）
 const userStates = new Map()
 
+// 圖片生成輔助函數（使用 Push Message）
+async function generateImageWithGeminiPush(prompt, source, userId) {
+  try {
+    const config = {
+      responseModalities: ['IMAGE', 'TEXT'],
+    };
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
+    const contents = [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `Generate an image: ${prompt}`,
+          },
+        ],
+      },
+    ];
+
+    const response = await genAI.models.generateContentStream({
+      model,
+      config,
+      contents,
+    });
+
+    let imageGenerated = false;
+    let textResponse = '';
+    
+    for await (const chunk of response) {
+      // 檢查用戶是否已取消
+      const currentState = userStates.get(userId);
+      if (!currentState || currentState.state !== 'generating_image') {
+        console.log('圖片生成已被用戶取消');
+        return; // 已被取消
+      }
+      
+      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+        continue;
+      }
+      
+      // 處理圖片數據
+      if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+        const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+        const buffer = Buffer.from(inlineData.data || '', 'base64');
+        
+        // 上傳圖片到 Google Cloud Storage
+        const imageUrl = await uploadImageToGCS(buffer, inlineData.mimeType, prompt);
+        
+        if (imageUrl) {
+          const imageMessage = {
+            type: 'image',
+            originalContentUrl: imageUrl,
+            previewImageUrl: imageUrl
+          };
+          
+          const successTextMessage = {
+            type: 'text',
+            text: `✅ 圖片已成功生成！\n\n🎨 主題：${prompt}\n🔗 圖片連結：${imageUrl}`
+          };
+          
+          await client.pushMessage(userId, [imageMessage, successTextMessage]);
+          imageGenerated = true;
+        } else {
+          // 如果無法上傳到雲端，則保存到本地
+          const savedPath = await saveImageLocally(buffer, inlineData.mimeType, prompt);
+          
+          if (savedPath) {
+            const successMessage = {
+              type: 'text',
+              text: `✅ 圖片已成功生成！\n\n🎨 主題：${prompt}\n📁 已保存至伺服器本地\n\n⚠️ 注意：由於雲端存儲配置問題，圖片已保存在伺服器的 images 資料夾中。`
+            };
+            
+            await client.pushMessage(userId, [successMessage]);
+            imageGenerated = true;
+          }
+        }
+      }
+      // 處理文字回應
+      else if (chunk.text) {
+        textResponse += chunk.text;
+      }
+    }
+    
+    // 如果沒有生成圖片但有文字回應，發送文字
+    if (!imageGenerated && textResponse) {
+      const textMessage = { type: 'text', text: `🤖 Gemini 回應：\n${textResponse}` };
+      await client.pushMessage(userId, [textMessage]);
+    } else if (!imageGenerated) {
+      const errorMessage = { type: 'text', text: '❌ 抱歉，圖片生成失敗，請稍後再試。' };
+      await client.pushMessage(userId, [errorMessage]);
+    }
+    
+  } catch (error) {
+    console.error('Gemini 圖片生成錯誤:', error);
+    const errorMessage = { type: 'text', text: '❌ 抱歉，圖片生成服務目前無法使用。請檢查 GEMINI_API_KEY 是否正確設定。' };
+    await client.pushMessage(userId, [errorMessage]);
+  }
+}
+
+// 上傳圖片到 Google Cloud Storage
+async function uploadImageToGCS(buffer, mimeType, prompt) {
+  try {
+    if (!storage || !bucket) {
+      console.log('⚠️ Google Cloud Storage 未正確配置，將使用本地存儲');
+      return null;
+    }
+    
+    // 生成檔案名
+    const fileExtension = mime.getExtension(mimeType) || 'jpg';
+    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 50);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `generated_images/${timestamp}_${cleanPrompt}.${fileExtension}`;
+    
+    // 上傳到 Google Cloud Storage
+    const file = bucket.file(fileName);
+    
+    await file.save(buffer, {
+      metadata: {
+        contentType: mimeType,
+        metadata: {
+          prompt: prompt,
+          generatedAt: new Date().toISOString(),
+          source: process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview'
+        }
+      }
+    });
+    
+    // 設定檔案為公開可讀
+    await file.makePublic();
+    
+    // 返回公開 URL
+    const publicUrl = `https://storage.googleapis.com/${process.env.GOOGLE_CLOUD_BUCKET_NAME}/${fileName}`;
+    
+    console.log(`✅ 圖片已上傳至 Google Cloud Storage: ${publicUrl}`);
+    return publicUrl;
+    
+  } catch (error) {
+    console.error('上傳至 Google Cloud Storage 失敗:', error);
+    return null;
+  }
+}
+
+// 保存圖片到本地的函數
+async function saveImageLocally(buffer, mimeType, prompt) {
+  try {
+    // 建立 images 目錄
+    const imagesDir = path.join(__dirname, 'images');
+    if (!fs.existsSync(imagesDir)) {
+      fs.mkdirSync(imagesDir, { recursive: true });
+    }
+    
+    // 生成檔案名（使用時間戳和清理過的提示詞）
+    const fileExtension = mime.getExtension(mimeType) || 'jpg';
+    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 50);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `${timestamp}_${cleanPrompt}.${fileExtension}`;
+    const filePath = path.join(imagesDir, fileName);
+    
+    // 將 buffer 寫入檔案
+    fs.writeFileSync(filePath, buffer);
+    
+    console.log(`✅ 圖片已保存至: ${filePath}`);
+    return filePath;
+    
+  } catch (error) {
+    console.error('保存圖片錯誤:', error);
+    return null;
+  }
+}
+
+// 圖片生成輔助函數
+async function generateImageWithGemini(prompt, replyToken) {
+  try {
+    const config = {
+      responseModalities: ['IMAGE', 'TEXT'],
+    };
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
+    const contents = [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `Generate an image: ${prompt}`,
+          },
+        ],
+      },
+    ];
+
+    const response = await genAI.models.generateContentStream({
+      model,
+      config,
+      contents,
+    });
+
+    let imageGenerated = false;
+    let textResponse = '';
+    
+    for await (const chunk of response) {
+      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+        continue;
+      }
+      
+      // 處理圖片數據
+      if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+        const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+        const buffer = Buffer.from(inlineData.data || '', 'base64');
+        
+        // 上傳圖片到 LINE 伺服器並取得 URL
+        const imageUrl = await uploadImageToLine(buffer, inlineData.mimeType);
+        
+        if (imageUrl) {
+          const imageMessage = {
+            type: 'image',
+            originalContentUrl: imageUrl,
+            previewImageUrl: imageUrl
+          };
+          
+          await client.replyMessage(replyToken, [imageMessage]);
+          imageGenerated = true;
+        }
+      }
+      // 處理文字回應
+      else if (chunk.text) {
+        textResponse += chunk.text;
+      }
+    }
+    
+    // 如果沒有生成圖片但有文字回應，發送文字
+    if (!imageGenerated && textResponse) {
+      const textMessage = { type: 'text', text: textResponse };
+      await client.replyMessage(replyToken, [textMessage]);
+    } else if (!imageGenerated) {
+      const errorMessage = { type: 'text', text: '抱歉，圖片生成失敗，請稍後再試。' };
+      await client.replyMessage(replyToken, [errorMessage]);
+    }
+    
+  } catch (error) {
+    console.error('Gemini 圖片生成錯誤:', error);
+    const errorMessage = { type: 'text', text: '抱歉，圖片生成服務目前無法使用。' };
+    await client.replyMessage(replyToken, [errorMessage]);
+  }
+}
+
+// 上傳圖片到 LINE 的輔助函數（使用臨時檔案方式）
+async function uploadImageToLine(buffer, mimeType) {
+  try {
+    // 建立臨時目錄
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    // 生成臨時檔案名
+    const fileExtension = mime.getExtension(mimeType) || 'jpg';
+    const fileName = `generated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
+    const tempFilePath = path.join(tempDir, fileName);
+    
+    // 將 buffer 寫入臨時檔案
+    fs.writeFileSync(tempFilePath, buffer);
+    
+    // 這裡需要一個公開的檔案伺服器來提供圖片 URL
+    // 暫時返回一個示例 URL，實際使用時需要配置檔案伺服器
+    // 或使用雲端存儲服務如 AWS S3, Google Cloud Storage 等
+    
+    // 清理臨時檔案（延遲刪除）
+    setTimeout(() => {
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+    }, 30000); // 30秒後刪除
+    
+    // 暫時返回 null，需要實際的檔案伺服器配置
+    console.log(`圖片已生成並保存至: ${tempFilePath}`);
+    return null;
+    
+  } catch (error) {
+    console.error('上傳圖片錯誤:', error);
+    return null;
+  }
+}
+
+// 檢查是否為圖片生成指令
+function isImageGenerationCommand(text) {
+  const imageCommands = ['!image', '!畫圖', '!img', '!圖片', '!產圖'];
+  const imageKeywords = ['畫圖', 'image', '幫我產生圖', '生成圖片', '產生圖片', '畫一張', '畫一個', '生成一張'];
+  
+  // 檢查指令驅動
+  const hasCommand = imageCommands.some(cmd => text.toLowerCase().startsWith(cmd.toLowerCase()));
+  
+  // 檢查自然語言驅動
+  const hasKeyword = imageKeywords.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()));
+  
+  return hasCommand || hasKeyword;
+}
+
+// 提取圖片生成提示詞
+function extractImagePrompt(text) {
+  const imageCommands = ['!image', '!畫圖', '!img', '!圖片', '!產圖'];
+  
+  // 如果是指令驅動，移除指令部分
+  for (const cmd of imageCommands) {
+    if (text.toLowerCase().startsWith(cmd.toLowerCase())) {
+      return text.substring(cmd.length).trim();
+    }
+  }
+  
+  // 如果是自然語言驅動，提取相關內容
+  const imageKeywords = ['畫圖', 'image', '幫我產生圖', '生成圖片', '產生圖片', '畫一張', '畫一個', '生成一張'];
+  
+  for (const keyword of imageKeywords) {
+    const index = text.toLowerCase().indexOf(keyword.toLowerCase());
+    if (index !== -1) {
+      // 提取關鍵字後面的內容作為提示詞
+      const afterKeyword = text.substring(index + keyword.length).trim();
+      if (afterKeyword) {
+        return afterKeyword;
+      } else {
+        // 如果關鍵字後面沒有內容，提取關鍵字前面的內容
+        const beforeKeyword = text.substring(0, index).trim();
+        return beforeKeyword || text;
+      }
+    }
+  }
+  
+  return text;
+}
+
 // create Express app
 const app = express()
+
+// 健康檢查端點
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    version: '1.2.0'
+  })
+})
 
 // register a webhook handler with middleware
 app.post('/callback', line.middleware(config), (req, res) => {
@@ -128,6 +490,81 @@ async function handleEvent(event) {
     }
     
     console.log('處理的用戶輸入:', userInput)
+    
+    // 取得用戶 ID（統一在此處宣告）
+    const userId = event.source.userId || event.source.groupId || event.source.roomId;
+    const userState = userStates.get(userId);
+    
+    // 檢查用戶是否正在生成圖片並想要取消
+    if (userState && userState.state === 'generating_image') {
+      const cancelKeywords = ['取消', '退出', '停止', 'cancel', 'stop', 'exit', '不要了', '算了'];
+      const isCancelCommand = cancelKeywords.some(keyword => 
+        userInput.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      if (isCancelCommand) {
+        userStates.delete(userId);
+        const cancelMessage = { 
+          type: 'text', 
+          text: '❌ 已取消圖片生成。\n\n如需重新生成圖片，請再次輸入圖片生成指令。' 
+        };
+        return client.replyMessage(event.replyToken, [cancelMessage]);
+      } else {
+        // 如果用戶在生成過程中發送了其他訊息，提醒他們可以取消
+        const reminderMessage = { 
+          type: 'text', 
+          text: `🎨 圖片「${userState.prompt}」正在生成中...\n\n如要取消，請輸入「取消」。` 
+        };
+        return client.replyMessage(event.replyToken, [reminderMessage]);
+      }
+    }
+    
+    // 檢查是否為圖片生成指令
+    if (isImageGenerationCommand(userInput)) {
+      const imagePrompt = extractImagePrompt(userInput);
+      
+      if (!imagePrompt || imagePrompt.length < 2) {
+        const echo = { type: 'text', text: '請提供要生成的圖片描述。\n例如：!畫圖 一隻可愛的小貓\n或：幫我畫一張美麗的風景圖' };
+        return client.replyMessage(event.replyToken, [echo]);
+      }
+      
+      // 設定用戶狀態為圖片生成中
+      userStates.set(userId, { 
+        state: 'generating_image', 
+        prompt: imagePrompt,
+        startTime: Date.now()
+      });
+      
+      // 發送處理中訊息和取消說明
+      const processingMessage = { 
+        type: 'text', 
+        text: `🎨 正在為您生成圖片：「${imagePrompt}」\n⏳ 請稍等片刻...\n\n💡 如要取消，請輸入「取消」、「退出」或「停止」` 
+      };
+      await client.replyMessage(event.replyToken, [processingMessage]);
+      
+      // 呼叫圖片生成函數（使用 push message 發送結果）
+      setTimeout(async () => {
+        try {
+          // 檢查用戶是否已取消
+          const currentState = userStates.get(userId);
+          if (!currentState || currentState.state !== 'generating_image') {
+            return; // 已被取消
+          }
+          
+          await generateImageWithGeminiPush(imagePrompt, event.source, userId);
+        } catch (error) {
+          console.error('圖片生成處理錯誤:', error);
+          const errorMsg = { type: 'text', text: '抱歉，圖片生成過程中發生錯誤。' };
+          await client.pushMessage(userId, [errorMsg]);
+        } finally {
+          // 清除用戶狀態
+          userStates.delete(userId);
+        }
+      }, 1000);
+      
+      return Promise.resolve(null);
+    }
+    
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -145,16 +582,17 @@ async function handleEvent(event) {
         },
       }
       
-      // 第二個按鈕組 - 天氣特報
+      // 第二個按鈕組 - 天氣特報和圖片生成
       const buttons2 = {
         type: 'template',
         altText: '更多服務',
         template: {
           type: 'buttons',
-          title: '天氣資訊',
-          text: '天氣相關服務',
+          title: '更多服務',
+          text: '天氣資訊與圖片生成',
           actions: [
-            { label: '天氣特報', type: 'message', text: '天氣特報' }
+            { label: '天氣特報', type: 'message', text: '天氣特報' },
+            { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' }
           ],
         },
       }
@@ -399,7 +837,6 @@ async function handleEvent(event) {
 
     if (userInput === '奇門遁甲') {
       // 設定用戶狀態為等待奇門遁甲問題
-      const userId = event.source.userId || event.source.groupId || event.source.roomId
       userStates.set(userId, { state: 'waiting_qimen_question' })
       
       const echo = { type: 'text', text: '請問您想要占卜什麼問題？\n例如：今天適合投資嗎？、這個工作機會好嗎？、感情狀況如何？\n\n如要取消，請輸入「取消」或「退出」' }
@@ -407,9 +844,6 @@ async function handleEvent(event) {
     }
 
     // 檢查用戶是否正在進行奇門遁甲占卜
-    const userId = event.source.userId || event.source.groupId || event.source.roomId
-    const userState = userStates.get(userId)
-    
     if (userState && userState.state === 'waiting_qimen_question') {
       // 檢查是否要取消奇門遁甲
       if (userInput === '取消' || userInput === '退出') {
