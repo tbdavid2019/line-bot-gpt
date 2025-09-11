@@ -625,7 +625,8 @@ async function handleEvent(event) {
           text: '天氣資訊與圖片生成',
           actions: [
             { label: '天氣特報', type: 'message', text: '天氣特報' },
-            { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' }
+            { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' },
+            { label: '法律諮詢', type: 'message', text: '法律諮詢' }
           ],
         },
       }
@@ -868,6 +869,17 @@ async function handleEvent(event) {
       }
     }
 
+    if (userInput === '法律諮詢') {
+      // 設定用戶狀態為等待法律問題
+      userStates.set(userId, { state: 'waiting_legal_question' })
+      
+      const echo = { 
+        type: 'text', 
+        text: '⚖️ 台灣法律諮詢服務\n\n請問您有什麼法律問題？\n例如：\n• AI產生的不實訊息，散播者會構成加重誹謗罪嗎？\n• 房屋買賣契約的注意事項\n• 勞動權益相關問題\n\n📝 請詳細描述您的問題，我會為您提供專業的法律分析。\n\n如要取消，請輸入「取消」或「退出」' 
+      }
+      return client.replyMessage(event.replyToken, [echo])
+    }
+
     if (userInput === '奇門遁甲') {
       // 設定用戶狀態為等待奇門遁甲問題
       userStates.set(userId, { state: 'waiting_qimen_question' })
@@ -914,6 +926,129 @@ async function handleEvent(event) {
         const echo = { type: 'text', text: '抱歉，奇門遁甲服務目前無法使用。' }
         return client.replyMessage(event.replyToken, [echo])
       }
+    }
+
+    // 檢查用戶是否正在進行法律諮詢
+    if (userState && userState.state === 'waiting_legal_question') {
+      // 檢查是否要取消法律諮詢
+      if (userInput === '取消' || userInput === '退出') {
+        userStates.delete(userId)
+        const echo = { type: 'text', text: '已取消法律諮詢。' }
+        return client.replyMessage(event.replyToken, [echo])
+      }
+      
+      // 清除用戶狀態
+      userStates.delete(userId)
+      
+      try {
+        // 發送處理中訊息
+        const processingMessage = { 
+          type: 'text', 
+          text: '⚖️ 正在分析您的法律問題...\n⏳ 請稍等片刻，台灣法律專家正在為您提供專業解答...' 
+        }
+        await client.replyMessage(event.replyToken, [processingMessage])
+        
+        // 呼叫台灣法律 LLM API
+        const legalResponse = await axios.post('https://taiwan-law-bot-dev.onrender.com/chat', {
+          messages: [
+            {
+              role: 'user',
+              content: userInput
+            }
+          ],
+          stream: false, // LINE bot 使用非串流模式比較簡單
+          is_paid_user: true,
+          is_thinking_mode: true,
+          general_public_mode: false,
+          writing_mode: true,
+          ai_high_court_only: false,
+          model: 'gpt-4o'
+        }, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        if (legalResponse.status === 200 && legalResponse.data) {
+          let legalAnswer = ''
+          
+          // 處理不同格式的回應
+          if (typeof legalResponse.data === 'string') {
+            // 處理 SSE 格式的串流資料
+            if (legalResponse.data.includes('data: {')) {
+              const lines = legalResponse.data.split('\n')
+              let content = ''
+              
+              for (const line of lines) {
+                if (line.startsWith('data: {')) {
+                  try {
+                    const jsonStr = line.substring(6) // 移除 "data: " 前綴
+                    const jsonData = JSON.parse(jsonStr)
+                    if (jsonData.content) {
+                      // 解碼 Unicode 編碼的內容
+                      const decodedContent = jsonData.content.replace(/\\u[\dA-F]{4}/gi, (match) => {
+                        return String.fromCharCode(parseInt(match.replace(/\\u/g, ''), 16))
+                      })
+                      content += decodedContent
+                    }
+                  } catch (e) {
+                    console.log('解析 SSE 資料錯誤:', e)
+                  }
+                }
+              }
+              legalAnswer = content || legalResponse.data
+            } else {
+              legalAnswer = legalResponse.data
+            }
+          } else if (legalResponse.data.choices && legalResponse.data.choices[0]) {
+            legalAnswer = legalResponse.data.choices[0].message?.content || JSON.stringify(legalResponse.data)
+          } else if (legalResponse.data.content) {
+            legalAnswer = legalResponse.data.content
+          } else {
+            legalAnswer = JSON.stringify(legalResponse.data)
+          }
+          
+          // LINE 訊息長度限制，如果超過 4500 字元就截斷
+          if (legalAnswer.length > 4500) {
+            legalAnswer = legalAnswer.substring(0, 4400) + '\n\n...(回應內容過長，已截取部分內容)'
+          }
+          
+          const legalText = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`
+          
+          // 如果回應還是太長，分段發送
+          if (legalText.length > 4500) {
+            const part1 = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer.substring(0, 3500)}`
+            const part2 = `${legalAnswer.substring(3500)}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`
+            
+            const message1 = { type: 'text', text: part1 }
+            const message2 = { type: 'text', text: part2 }
+            
+            await client.pushMessage(userId, [message1])
+            await client.pushMessage(userId, [message2])
+          } else {
+            const echo = { type: 'text', text: legalText }
+            await client.pushMessage(userId, [echo])
+          }
+          
+        } else {
+          const echo = { type: 'text', text: '❌ 抱歉，目前無法取得法律諮詢回應。請稍後再試。' }
+          await client.pushMessage(userId, [echo])
+        }
+        
+      } catch (error) {
+        console.error('台灣法律 LLM API 錯誤:', error)
+        let errorMessage = '❌ 抱歉，法律諮詢服務目前無法使用。'
+        
+        if (error.response) {
+          console.error('API 回應錯誤:', error.response.status, error.response.data)
+          errorMessage += `\n錯誤代碼：${error.response.status}`
+        }
+        
+        const echo = { type: 'text', text: errorMessage }
+        await client.pushMessage(userId, [echo])
+      }
+      
+      return Promise.resolve(null)
     }
 
     const messages = [
