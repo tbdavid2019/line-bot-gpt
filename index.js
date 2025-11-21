@@ -69,6 +69,215 @@ const client = new line.Client(config)
 // 用戶狀態管理（簡單的記憶體存儲）
 const userStates = new Map()
 
+// 顯示 Loading Indicator 的輔助函數
+async function showLoadingAnimation(chatId, seconds = 20) {
+  try {
+    await axios.post(
+      'https://api.line.me/v2/bot/chat/loading/start',
+      {
+        chatId: chatId,
+        loadingSeconds: seconds
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+        }
+      }
+    )
+    console.log(`✅ Loading indicator 已啟動 (${seconds}秒), chatId: ${chatId}`)
+  } catch (error) {
+    console.error('❌ Loading indicator 啟動失敗:', error.response?.data || error.message)
+  }
+}
+
+// 從 LINE 下載圖片內容
+async function downloadImageFromLine(messageId) {
+  try {
+    const stream = await client.getMessageContent(messageId);
+    const chunks = [];
+    
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    
+    const buffer = Buffer.concat(chunks);
+    console.log(`✅ 成功下載圖片，大小: ${buffer.length} bytes`);
+    return buffer;
+  } catch (error) {
+    console.error('❌ 下載圖片失敗:', error);
+    return null;
+  }
+}
+
+// 判斷用戶意圖（分析圖片 vs 編輯圖片）
+function detectImageIntent(text) {
+  if (!text || text.trim() === '') {
+    return 'select_mode'; // 沒有文字，顯示選擇按鈕
+  }
+  
+  const lowerText = text.toLowerCase();
+  
+  // 編輯關鍵字（優先級較高，因為更具體）
+  const editKeywords = [
+    '編輯', '修改', '改成', '變成', '改圖', '調整',
+    '把', '讓', '加上', '移除', '替換', '改變',
+    'edit', 'modify', 'change', 'transform',
+    '背景', '風格', '顏色', '特效', '濾鏡'
+  ];
+  
+  // 分析關鍵字
+  const analyzeKeywords = [
+    '這是什麼', '是什麼', '分析', '看圖', '描述',
+    '說明', '辨識', '識別', '解釋', '圖片內容',
+    'what is', 'describe', 'analyze', 'explain',
+    '有什麼', '裡面有', '看到什麼', '告訴我',
+    '幫我看', '請問'
+  ];
+  
+  // 檢查編輯關鍵字
+  for (const keyword of editKeywords) {
+    if (lowerText.includes(keyword)) {
+      return 'edit_image';
+    }
+  }
+  
+  // 檢查分析關鍵字
+  for (const keyword of analyzeKeywords) {
+    if (lowerText.includes(keyword)) {
+      return 'analyze_image';
+    }
+  }
+  
+  // 預設為分析（較安全）
+  return 'analyze_image';
+}
+
+// 圖片分析功能（使用 Gemini Vision，純文字輸出）
+async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
+  try {
+    const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash';
+    const userPrompt = prompt || '請詳細描述這張圖片的內容，包括主要物體、場景、顏色、氛圍等';
+    
+    console.log(`🔍 使用 ${model} 分析圖片...`);
+    
+    const response = await genAI.models.generateContent({
+      model: model,
+      contents: [{
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              data: imageBuffer.toString('base64'),
+              mimeType: 'image/jpeg'
+            }
+          },
+          { text: userPrompt }
+        ]
+      }]
+    });
+    
+    const analysisText = response.response.text();
+    console.log('✅ 圖片分析完成');
+    return analysisText;
+    
+  } catch (error) {
+    console.error('❌ 圖片分析錯誤:', error);
+    throw error;
+  }
+}
+
+// 圖片編輯功能（使用 Gemini Image，圖片輸出）
+async function editImageWithGemini(imageBuffer, editPrompt, userId) {
+  try {
+    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
+    const config = {
+      responseModalities: ['IMAGE', 'TEXT'],
+    };
+    
+    console.log(`✏️ 使用 ${model} 編輯圖片...`);
+    console.log(`編輯指令: ${editPrompt}`);
+    
+    const contents = [{
+      role: 'user',
+      parts: [
+        {
+          inlineData: {
+            data: imageBuffer.toString('base64'),
+            mimeType: 'image/jpeg'
+          }
+        },
+        { text: `Edit this image: ${editPrompt}. Keep the main subject but ${editPrompt}` }
+      ]
+    }];
+    
+    const response = await genAI.models.generateContentStream({
+      model,
+      config,
+      contents,
+    });
+    
+    let imageGenerated = false;
+    let textResponse = '';
+    
+    for await (const chunk of response) {
+      // 檢查用戶是否已取消
+      const currentState = userStates.get(userId);
+      if (!currentState || currentState.state !== 'editing_image') {
+        console.log('圖片編輯已被用戶取消');
+        return { success: false, cancelled: true };
+      }
+      
+      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+        continue;
+      }
+      
+      // 處理圖片數據
+      if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+        const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+        const buffer = Buffer.from(inlineData.data || '', 'base64');
+        
+        // 上傳圖片到 Google Cloud Storage
+        const imageUrl = await uploadImageToGCS(buffer, inlineData.mimeType, `edited_${editPrompt}`);
+        
+        if (imageUrl) {
+          console.log('✅ 圖片編輯完成並上傳');
+          return {
+            success: true,
+            imageUrl: imageUrl,
+            buffer: buffer,
+            mimeType: inlineData.mimeType
+          };
+        } else {
+          // 如果無法上傳到雲端，則保存到本地
+          const savedPath = await saveImageLocally(buffer, inlineData.mimeType, `edited_${editPrompt}`);
+          return {
+            success: true,
+            localPath: savedPath,
+            buffer: buffer,
+            mimeType: inlineData.mimeType
+          };
+        }
+      }
+      // 處理文字回應
+      else if (chunk.text) {
+        textResponse += chunk.text;
+      }
+    }
+    
+    // 如果沒有生成圖片
+    if (!imageGenerated && textResponse) {
+      return { success: false, error: 'No image generated', textResponse };
+    }
+    
+    return { success: false, error: 'Image generation failed' };
+    
+  } catch (error) {
+    console.error('❌ 圖片編輯錯誤:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // 圖片生成輔助函數（使用 Push Message）
 async function generateImageWithGeminiPush(prompt, source, userId) {
   try {
@@ -436,6 +645,52 @@ app.post('/callback', line.middleware(config), (req, res) => {
 // event handler
 async function handleEvent(event) {
   try {
+    // 處理圖片訊息
+    if (event.type === 'message' && event.message.type === 'image') {
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
+      const messageId = event.message.id;
+      
+      console.log('📸 收到圖片訊息:', { userId, messageId });
+      
+      // 儲存圖片訊息 ID，等待用戶指令
+      userStates.set(userId, {
+        state: 'waiting_image_action',
+        messageId: messageId,
+        timestamp: Date.now()
+      });
+      
+      // 發送選擇按鈕
+      const selectMessage = {
+        type: 'template',
+        altText: '📸 請選擇功能',
+        template: {
+          type: 'buttons',
+          title: '📸 收到圖片',
+          text: '請選擇要如何處理這張圖片',
+          actions: [
+            {
+              type: 'message',
+              label: '🔍 分析圖片',
+              text: '分析'
+            },
+            {
+              type: 'message',
+              label: '✏️ 編輯圖片',
+              text: '編輯'
+            },
+            {
+              type: 'message',
+              label: '❌ 取消',
+              text: '取消'
+            }
+          ]
+        }
+      };
+      
+      return client.replyMessage(event.replyToken, [selectMessage]);
+    }
+    
+    // 處理文字訊息
     if (event.type !== 'message' || event.message.type !== 'text') {
       return Promise.resolve(null)
     }
@@ -528,6 +783,172 @@ async function handleEvent(event) {
     const userId = event.source.userId || event.source.groupId || event.source.roomId;
     const userState = userStates.get(userId);
     
+    // 處理圖片相關狀態
+    if (userState && userState.state === 'waiting_image_action') {
+      const cancelKeywords = ['取消', '退出', 'cancel', '算了'];
+      const isCancelCommand = cancelKeywords.some(keyword => 
+        userInput.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      if (isCancelCommand) {
+        userStates.delete(userId);
+        const echo = { type: 'text', text: '❌ 已取消圖片處理。' };
+        return client.replyMessage(event.replyToken, [echo]);
+      }
+      
+      // 判斷用戶意圖
+      const intent = detectImageIntent(userInput);
+      
+      if (intent === 'analyze_image' || userInput === '分析') {
+        // 圖片分析模式
+        try {
+          // 顯示 Loading Indicator
+          await showLoadingAnimation(userId, 30);
+          
+          // 下載圖片
+          const imageBuffer = await downloadImageFromLine(userState.messageId);
+          if (!imageBuffer) {
+            userStates.delete(userId);
+            const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
+            return client.replyMessage(event.replyToken, [errorMsg]);
+          }
+          
+          // 分析圖片
+          const processingMessage = { type: 'text', text: '🔍 正在分析圖片...\n⏳ 請稍等片刻...' };
+          await client.replyMessage(event.replyToken, [processingMessage]);
+          
+          const analysis = await analyzeImageWithGemini(imageBuffer, userInput === '分析' ? null : userInput, userId);
+          
+          // 清除狀態
+          userStates.delete(userId);
+          
+          // 發送分析結果
+          const resultMessage = { 
+            type: 'text', 
+            text: `🔍 圖片分析結果：\n\n${analysis}` 
+          };
+          await client.pushMessage(userId, [resultMessage]);
+          
+        } catch (error) {
+          console.error('圖片分析錯誤:', error);
+          userStates.delete(userId);
+          const errorMsg = { type: 'text', text: '❌ 抱歉，圖片分析失敗。請稍後再試。' };
+          await client.pushMessage(userId, [errorMsg]);
+        }
+        
+        return Promise.resolve(null);
+        
+      } else if (intent === 'edit_image' || userInput === '編輯') {
+        // 切換到等待編輯指令狀態
+        userStates.set(userId, {
+          state: 'waiting_edit_prompt',
+          messageId: userState.messageId,
+          timestamp: Date.now()
+        });
+        
+        const promptMessage = { 
+          type: 'text', 
+          text: '✏️ 請描述如何編輯這張圖片？\n\n範例：\n• 把背景改成海邊\n• 改成卡通風格\n• 加上彩虹和雲朵\n• 讓顏色更鮮豔\n\n如要取消，請輸入「取消」' 
+        };
+        return client.replyMessage(event.replyToken, [promptMessage]);
+      }
+    }
+    
+    // 處理等待編輯指令狀態
+    if (userState && userState.state === 'waiting_edit_prompt') {
+      const cancelKeywords = ['取消', '退出', 'cancel', '算了'];
+      const isCancelCommand = cancelKeywords.some(keyword => 
+        userInput.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      if (isCancelCommand) {
+        userStates.delete(userId);
+        const echo = { type: 'text', text: '❌ 已取消圖片編輯。' };
+        return client.replyMessage(event.replyToken, [echo]);
+      }
+      
+      // 開始編輯圖片
+      try {
+        // 更新狀態為編輯中
+        userStates.set(userId, {
+          state: 'editing_image',
+          messageId: userState.messageId,
+          prompt: userInput,
+          timestamp: Date.now()
+        });
+        
+        // 顯示 Loading Indicator
+        await showLoadingAnimation(userId, 60);
+        
+        // 下載圖片
+        const imageBuffer = await downloadImageFromLine(userState.messageId);
+        if (!imageBuffer) {
+          userStates.delete(userId);
+          const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
+          return client.replyMessage(event.replyToken, [errorMsg]);
+        }
+        
+        // 發送處理中訊息
+        const processingMessage = { 
+          type: 'text', 
+          text: `🎨 正在編輯圖片：「${userInput}」\n⏳ 請稍等片刻，這可能需要 30-60 秒...\n\n💡 如要取消，請輸入「取消」` 
+        };
+        await client.replyMessage(event.replyToken, [processingMessage]);
+        
+        // 編輯圖片
+        const result = await editImageWithGemini(imageBuffer, userInput, userId);
+        
+        // 清除狀態
+        userStates.delete(userId);
+        
+        if (result.success && result.imageUrl) {
+          // 成功編輯並上傳到雲端
+          const imageMessage = {
+            type: 'image',
+            originalContentUrl: result.imageUrl,
+            previewImageUrl: result.imageUrl
+          };
+          
+          const successMessage = {
+            type: 'text',
+            text: `✅ 圖片編輯完成！\n\n✏️ 編輯指令：${userInput}\n🔗 圖片連結：${result.imageUrl}`
+          };
+          
+          await client.pushMessage(userId, [imageMessage, successMessage]);
+          
+        } else if (result.success && result.localPath) {
+          // 保存到本地
+          const successMessage = {
+            type: 'text',
+            text: `✅ 圖片編輯完成！\n\n✏️ 編輯指令：${userInput}\n📁 已保存至伺服器本地\n\n⚠️ 注意：由於雲端存儲配置問題，圖片已保存在伺服器的 images 資料夾中。`
+          };
+          
+          await client.pushMessage(userId, [successMessage]);
+          
+        } else if (result.cancelled) {
+          // 用戶取消
+          const cancelMessage = { type: 'text', text: '❌ 圖片編輯已取消。' };
+          await client.pushMessage(userId, [cancelMessage]);
+          
+        } else {
+          // 編輯失敗
+          const errorMessage = { 
+            type: 'text', 
+            text: `❌ 抱歉，圖片編輯失敗。\n\n錯誤訊息：${result.error || '未知錯誤'}\n\n請稍後再試。` 
+          };
+          await client.pushMessage(userId, [errorMessage]);
+        }
+        
+      } catch (error) {
+        console.error('圖片編輯處理錯誤:', error);
+        userStates.delete(userId);
+        const errorMsg = { type: 'text', text: '❌ 抱歉，圖片編輯過程中發生錯誤。請稍後再試。' };
+        await client.pushMessage(userId, [errorMsg]);
+      }
+      
+      return Promise.resolve(null);
+    }
+    
     // 檢查用戶是否正在生成圖片並想要取消
     if (userState && userState.state === 'generating_image') {
       const cancelKeywords = ['取消', '退出', '停止', 'cancel', 'stop', 'exit', '不要了', '算了'];
@@ -567,6 +988,9 @@ async function handleEvent(event) {
         prompt: imagePrompt,
         startTime: Date.now()
       });
+      
+      // 顯示 Loading Indicator (最長 60 秒)
+      await showLoadingAnimation(userId, 60);
       
       // 發送處理中訊息和取消說明
       const processingMessage = { 
@@ -900,6 +1324,9 @@ async function handleEvent(event) {
       // 清除用戶狀態
       userStates.delete(userId)
       
+      // 顯示 Loading Indicator (最長 20 秒)
+      await showLoadingAnimation(userId, 20);
+      
       try {
         // 呼叫奇門遁甲 API
         const qimenResponse = await axios.post('https://qi.david888.com/api/qimen-question', {
@@ -941,6 +1368,9 @@ async function handleEvent(event) {
       userStates.delete(userId)
       
       try {
+        // 顯示 Loading Indicator (最長 60 秒)
+        await showLoadingAnimation(userId, 60);
+        
         // 發送處理中訊息
         const processingMessage = { 
           type: 'text', 
@@ -1051,6 +1481,9 @@ async function handleEvent(event) {
       return Promise.resolve(null)
     }
 
+    // 顯示 Loading Indicator (最長 20 秒)
+    await showLoadingAnimation(userId, 20);
+    
     const messages = [
       {
         role: 'system',

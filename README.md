@@ -51,38 +51,89 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 ## 功能 (Features)
 
 - 整合 OpenAI GPT-4 聊天機器人
-- 整合 Google Gemini 2.5 Flash 圖片生成功能
+- 整合 Google Gemini 2.5 Flash AI 視覺功能
+  - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
+  - ✏️ **圖片編輯**：基於現有圖片進行 AI 編輯
+  - 🎨 **文字生成圖片**：從文字描述生成全新圖片
 - 解答之書占卜服務
 - 唐詩隨機推薦
 - 淺草籤占卜
 - 奇門遁甲占卜
 - 台灣氣象署天氣特報
+- 台灣法律諮詢（整合台灣法律 LLM）
 - 支援群組聊天（需要 @ 機器人）
 - 通過環境變數配置 API 金鑰
 - 支援 Docker 容器化
 
-### 圖片生成功能
+### 🔍 圖片分析功能（NEW！）
 
-- **指令驅動**：使用 `!image`、`!畫圖`、`!img`、`!圖片`、`!產圖` 等指令後接描述文字
-- **自然語言驅動**：在對話中包含「畫圖」、「image」、「幫我產生圖」、「生成圖片」等關鍵字
-- **取消機制**：在生成過程中輸入「取消」、「退出」、「停止」等關鍵字可中止操作
-- **雲端存儲**：支援 Google Cloud Storage，用戶可直接在 LINE 中查看圖片
-- **本地備用**：如果雲端未配置，自動使用本地存儲
+讓 AI 幫你「看圖說話」，分析圖片內容並回答問題。
 
-**使用範例：**
+**使用方式：**
+1. 傳送圖片給 Bot
+2. 輸入你的問題或直接點選「🔍 分析圖片」
 
+**分析範例：**
+- `這是什麼？` → AI 會描述圖片內容
+- `這張照片是在哪裡拍的？` → AI 會根據場景推測地點
+- `圖片裡有什麼？` → AI 會列出圖片中的物體
+- `請描述這張圖片` → AI 會提供詳細描述
+
+**自動觸發關鍵字：**
+這是什麼、分析、看圖、描述、辨識、有什麼、what is、describe 等
+
+### ✏️ 圖片編輯功能（NEW！）
+
+基於現有圖片進行 AI 編輯，改變風格、背景或添加元素。
+
+**使用方式：**
+1. 傳送圖片給 Bot
+2. 輸入編輯指令或點選「✏️ 編輯圖片」
+
+**編輯範例：**
+- `把背景改成海邊` → 更換圖片背景
+- `改成卡通風格` → 轉換藝術風格
+- `加上彩虹和雲朵` → 添加新元素
+- `讓顏色更鮮豔` → 調整色調
+
+**自動觸發關鍵字：**
+編輯、修改、改成、變成、把...改、加上、背景、風格、edit、change 等
+
+### 🎨 文字生成圖片功能
+
+從零開始，用文字描述生成全新圖片。
+
+**使用方式：**
+- **指令驅動**：`!畫圖 一隻可愛的小貓咪`、`!image a sunset`
+- **自然語言驅動**：在對話中包含「畫圖」、「幫我產生圖」等關鍵字
+- **取消機制**：生成過程中輸入「取消」可中止
+
+**生成範例：**
 - `!畫圖 一隻可愛的小貓咪在花園裡玩耍`
 - `幫我畫一張美麗的夕陽風景圖`
-- `!image a cute robot playing with children`
-- 生成過程中輸入 `取消` 可中止操作
+- `!image a futuristic city with flying cars`
+
+### 📊 功能對比表
+
+| 功能 | 輸入 | 輸出 | 使用情境 |
+|------|------|------|----------|
+| 圖片分析 🔍 | 圖片 + 問題 | 文字描述 | 想知道圖片內容、辨識物體 |
+| 圖片編輯 ✏️ | 圖片 + 編輯指令 | 編輯後的圖片 | 修改現有圖片的風格或內容 |
+| 文字生成圖片 🎨 | 文字描述 | 全新圖片 | 從零創作、實現想像 |
+
+---
 
 - Integrated with OpenAI GPT-4 chatbot
-- Integrated with Google Gemini 2.5 Flash image generation
+- Integrated with Google Gemini 2.5 Flash AI Vision features
+  - 🔍 **Image Analysis**: Upload images for AI content analysis
+  - ✏️ **Image Editing**: AI-powered editing of existing images
+  - 🎨 **Text-to-Image**: Generate new images from text descriptions
 - Answer Book divination service
 - Random Tang poetry recommendations
 - Asakusa temple fortune slips
 - Qimen Dunjia divination
 - Taiwan weather alerts
+- Taiwan legal consultation (integrated with Taiwan Legal LLM)
 - Group chat support (requires @ mention)
 - OpenAI and LINE API keys are configured via environment variables
 - Supports Docker containerization
@@ -176,25 +227,69 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 In the `.env` file, you need to configure the following environment variables:
 
 ```bash
+# LINE Bot 設定
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_CHANNEL_SECRET=your_line_channel_secret
 LINE_BOT_USER_ID=your_line_bot_user_id
+
+# OpenAI 設定
 OPEN_AI_LINE_SECRET=your_openai_api_key
+OPEN_AI_MODEL=gpt-4o-mini
+OPEN_AI_BASE_PATH=https://api.openai.com/v1
+
+# Gemini AI 設定
 GEMINI_API_KEY=your_gemini_api_key
-# Google Cloud Storage 設定 (可選，用於圖片存儲)
+GEMINI_MODEL=gemini-2.5-flash-image-preview          # 用於圖片生成/編輯
+GEMINI_VISION_MODEL=gemini-2.5-flash                 # 用於圖片分析（看圖說話）
+
+# 圖片功能開關（可選）
+ENABLE_IMAGE_ANALYSIS=true
+ENABLE_IMAGE_EDITING=true
+
+# Google Cloud Storage 設定（可選，用於圖片存儲）
 GOOGLE_CLOUD_PROJECT_ID=your_project_id
 GOOGLE_CLOUD_BUCKET_NAME=your_bucket_name
 GOOGLE_CLOUD_KEY_FILE=path/to/service-account-key.json
+
+# 伺服器設定
 PORT=8111
 ```
 
+### 🔑 重要環境變數說明
+
+#### LINE Bot 設定
+- `LINE_CHANNEL_ACCESS_TOKEN`：LINE 頻道存取權杖
+- `LINE_CHANNEL_SECRET`：LINE 頻道密鑰
+- `LINE_BOT_USER_ID`：機器人用戶 ID（用於群組 @ 提及判斷）
+
+#### Gemini AI 模型設定
+- `GEMINI_MODEL`：**圖片生成/編輯模型**
+  - 預設：`gemini-2.5-flash-image-preview`
+  - 用途：從文字生成圖片、編輯現有圖片
+  - 輸出：**圖片**
+
+- `GEMINI_VISION_MODEL`：**圖片分析模型（LLM 看圖）**
+  - 預設：`gemini-2.5-flash`
+  - 用途：分析圖片內容、回答圖片相關問題
+  - 輸出：**文字描述**
+
+#### Google Cloud Storage（可選但推薦）
+- 用於儲存生成/編輯的圖片
+- 如果未配置，圖片會保存到本地 `images` 資料夾
+- 詳細設定請參考 [GOOGLE_CLOUD_SETUP.md](GOOGLE_CLOUD_SETUP.md)
+
+---
+
 **重要提醒：** 
-- 為了讓機器人在群組中只對被 @ 提及的訊息回應，您需要設定 `LINE_BOT_USER_ID`。這個 ID 可以在 LINE Developers Console 的機器人設定頁面找到。
-- `GEMINI_API_KEY` 是用於圖片生成功能，您可以在 [Google AI Studio](https://makersuite.google.com/app/apikey) 取得 API Key。
 
 **Important Note:** 
-- To make the bot respond only to messages where it's mentioned (@) in groups, you need to set `LINE_BOT_USER_ID`. This ID can be found in the bot settings page of the LINE Developers Console.
-- `GEMINI_API_KEY` is used for image generation feature. You can get the API key from [Google AI Studio](https://makersuite.google.com/app/apikey).
+
+- ✅ **群組功能**：設定 `LINE_BOT_USER_ID` 讓機器人只回應被 @ 的訊息
+- ✅ **圖片功能**：需要設定 `GEMINI_API_KEY`，可在 [Google AI Studio](https://makersuite.google.com/app/apikey) 取得
+- ✅ **模型區分**：
+  - `GEMINI_MODEL` = 生成/編輯圖片（輸出圖片）
+  - `GEMINI_VISION_MODEL` = 分析圖片（輸出文字）
+- ⚠️ **不要搞混模型用途**，否則功能會異常！
 
 ## 安裝與執行 (Installation and Running) (方法2)
 

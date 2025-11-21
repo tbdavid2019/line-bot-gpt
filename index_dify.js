@@ -21,6 +21,28 @@ const config = {
 // create LINE SDK client
 const client = new line.Client(config)
 
+// 顯示 Loading Indicator 的輔助函數
+async function showLoadingAnimation(chatId, seconds = 20) {
+  try {
+    await axios.post(
+      'https://api.line.me/v2/bot/chat/loading/start',
+      {
+        chatId: chatId,
+        loadingSeconds: seconds
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+        }
+      }
+    )
+    console.log(`✅ Loading indicator 已啟動 (${seconds}秒), chatId: ${chatId}`)
+  } catch (error) {
+    console.error('❌ Loading indicator 啟動失敗:', error.response?.data || error.message)
+  }
+}
+
 // create Express app
 const app = express()
 
@@ -47,6 +69,9 @@ async function handleEvent(event) {
 
     const userInput = event.message.text.trim()
 
+    // 取得用戶 ID
+    const userId = event.source.userId || event.source.groupId || event.source.roomId;
+
     // 切換到使用 TDARES API
     if (userInput.toLowerCase() === 'tcdares') {
       useTdaresApi = true;
@@ -64,6 +89,9 @@ async function handleEvent(event) {
     // 如果使用 TDARES API
     if (useTdaresApi) {
       try {
+        // 顯示 Loading Indicator (最長 20 秒)
+        await showLoadingAnimation(userId, 20);
+        
         console.log('使用 TDARES API 處理用戶輸入:', userInput);
         const response = await axios.post('http://2.tcdares.david888.com/v1/chat-messages', {
           inputs: {},
@@ -98,6 +126,9 @@ async function handleEvent(event) {
       }
     }
     // 如果使用 OpenAI
+    // 顯示 Loading Indicator (最長 20 秒)
+    await showLoadingAnimation(userId, 20);
+    
     console.log('使用 OpenAI 處理用戶輸入:', userInput);
     const messages = [
       {
