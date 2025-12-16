@@ -819,14 +819,18 @@ async function handleEvent(event) {
 
       // Call Python script for RAG
       return new Promise((resolve, reject) => {
-        const pythonProcess = spawn('./venv/bin/python', ['rag_service.py', query]);
+        const pythonProcess = spawn('./venv/bin/python', ['rag_service.py', query], {
+          encoding: 'utf-8'
+        });
 
         let dataString = '';
 
+        pythonProcess.stdout.setEncoding('utf8');
         pythonProcess.stdout.on('data', (data) => {
           dataString += data.toString();
         });
 
+        pythonProcess.stderr.setEncoding('utf8');
         pythonProcess.stderr.on('data', (data) => {
           console.error(`Python Error: ${data}`);
         });
