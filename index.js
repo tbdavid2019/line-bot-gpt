@@ -156,79 +156,6 @@ function detectImageIntent(text) {
   return 'analyze_image';
 }
 
-// 處理大同食譜查詢
-if (userInput.startsWith('大同食譜')) {
-  const query = userInput.replace('大同食譜', '').trim();
-  if (!query) {
-    return client.replyMessage(event.replyToken, { type: 'text', text: '請輸入您想查詢的食譜，例如：「大同食譜 電鍋煮飯」' });
-  }
-
-  await showLoadingAnimation(userId, 20); // 顯示 loading
-
-  // Call Python script for RAG
-  return new Promise((resolve, reject) => {
-    const pythonProcess = spawn('./venv/bin/python', ['rag_service.py', query]);
-
-    let dataString = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      dataString += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      console.error(`Python Error: ${data}`);
-    });
-
-    pythonProcess.on('close', async (code) => {
-      try {
-        if (code !== 0) {
-          await client.replyMessage(event.replyToken, { type: 'text', text: '查詢食譜時發生錯誤。' });
-          return resolve(null);
-        }
-
-        const result = JSON.parse(dataString);
-        if (result.error) {
-          console.error('RAG Error:', result.error);
-          await client.replyMessage(event.replyToken, { type: 'text', text: '查詢數據庫時發生錯誤。' });
-          return resolve(null);
-        }
-
-        const documents = result.documents || [];
-        if (documents.length === 0) {
-          await client.replyMessage(event.replyToken, { type: 'text', text: '抱歉，找不到相關食譜。' });
-          return resolve(null);
-        }
-
-        // Generate answer with GPT-4
-        const context = documents.join('\n\n');
-        const systemPrompt = `你是一個專業的大同電鍋食譜助手。請根據以下參考資料回答使用者的問題。如果參考資料中沒有相關資訊，請誠實告知。
-            
-參考資料：
-${context}`;
-
-        const userPrompt = `使用者問題：${query}`;
-
-        const completion = await openai.chat.completions.create({
-          model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          max_tokens: 1000,
-        });
-
-        const replyText = completion.choices[0].message.content;
-        await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
-        resolve(null);
-
-      } catch (error) {
-        console.error('Processing RAG result error:', error);
-        await client.replyMessage(event.replyToken, { type: 'text', text: '處理食譜回應時發生錯誤。' });
-        resolve(null);
-      }
-    });
-  });
-}
 
 // 圖片分析功能（使用 Gemini Vision，純文字輸出）
 async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
@@ -869,6 +796,81 @@ async function handleEvent(event) {
 
     // 取得用戶 ID（統一在此處宣告）
     const userId = event.source.userId || event.source.groupId || event.source.roomId;
+
+    // 處理大同食譜查詢
+    if (userInput.startsWith('大同食譜')) {
+      const query = userInput.replace('大同食譜', '').trim();
+      if (!query) {
+        return client.replyMessage(event.replyToken, { type: 'text', text: '請輸入您想查詢的食譜，例如：「大同食譜 電鍋煮飯」' });
+      }
+
+      await showLoadingAnimation(userId, 20); // 顯示 loading
+
+      // Call Python script for RAG
+      return new Promise((resolve, reject) => {
+        const pythonProcess = spawn('./venv/bin/python', ['rag_service.py', query]);
+
+        let dataString = '';
+
+        pythonProcess.stdout.on('data', (data) => {
+          dataString += data.toString();
+        });
+
+        pythonProcess.stderr.on('data', (data) => {
+          console.error(`Python Error: ${data}`);
+        });
+
+        pythonProcess.on('close', async (code) => {
+          try {
+            if (code !== 0) {
+              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢食譜時發生錯誤。' });
+              return resolve(null);
+            }
+
+            const result = JSON.parse(dataString);
+            if (result.error) {
+              console.error('RAG Error:', result.error);
+              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢數據庫時發生錯誤。' });
+              return resolve(null);
+            }
+
+            const documents = result.documents || [];
+            if (documents.length === 0) {
+              await client.replyMessage(event.replyToken, { type: 'text', text: '抱歉，找不到相關食譜。' });
+              return resolve(null);
+            }
+
+            // Generate answer with GPT-4
+            const context = documents.join('\n\n');
+            const systemPrompt = `你是一個專業的大同電鍋食譜助手。請根據以下參考資料回答使用者的問題。如果參考資料中沒有相關資訊，請誠實告知。
+                
+參考資料：
+${context}`;
+
+            const userPrompt = `使用者問題：${query}`;
+
+            const completion = await openai.chat.completions.create({
+              model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+              ],
+              max_tokens: 1000,
+            });
+
+            const replyText = completion.choices[0].message.content;
+            await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+            resolve(null);
+
+          } catch (error) {
+            console.error('Processing RAG result error:', error);
+            await client.replyMessage(event.replyToken, { type: 'text', text: '處理食譜回應時發生錯誤。' });
+            resolve(null);
+          }
+        });
+      });
+    }
+
     const userState = userStates.get(userId);
 
     // 處理圖片相關狀態
