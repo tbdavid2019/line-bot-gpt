@@ -1,5 +1,5 @@
 # 使用最新的 Node.js LTS 版本
-FROM node:18-alpine
+FROM node:22-alpine
 
 # 設置工作目錄
 WORKDIR /usr/src/app
@@ -12,7 +12,7 @@ RUN npm ci --only=production
 
 # 創建必要的目錄並設置權限
 RUN mkdir -p images test_images && \
-    chown -R node:node images test_images
+  chown -R node:node images test_images
 
 # 將源代碼複製到容器中（排除不必要的檔案）
 COPY --chown=node:node . .

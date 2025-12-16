@@ -2,7 +2,7 @@ require('dotenv').config()
 
 const express = require('express')
 const line = require('@line/bot-sdk')
-const { Configuration, OpenAIApi } = require('openai')
+const OpenAI = require('openai')
 const axios = require('axios')
 const { GoogleGenAI } = require('@google/genai')
 const { Storage } = require('@google-cloud/storage')
@@ -32,11 +32,10 @@ function getFileExtensionFromMimeType(mimeType) {
 }
 
 // 初始化 OpenAI 客戶端
-const configuration = new Configuration({
+const openai = new OpenAI({
   apiKey: process.env.OPEN_AI_LINE_SECRET,
-  basePath: process.env.OPEN_AI_BASE_PATH || 'https://api.openai.com/v1', // 默認的 OpenAI API endpoint
+  baseURL: process.env.OPEN_AI_BASE_PATH || 'https://api.openai.com/v1', // 默認的 OpenAI API endpoint
 });
-const openai = new OpenAIApi(configuration);
 
 // 初始化 Google GenAI 客戶端
 const genAI = new GoogleGenAI({
@@ -209,7 +208,7 @@ ${context}`;
 
         const userPrompt = `使用者問題：${query}`;
 
-        const completion = await openai.createChatCompletion({
+        const completion = await openai.chat.completions.create({
           model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
           messages: [
             { role: 'system', content: systemPrompt },
@@ -218,7 +217,7 @@ ${context}`;
           max_tokens: 1000,
         });
 
-        const replyText = completion.data.choices[0].message.content;
+        const replyText = completion.choices[0].message.content;
         await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
         resolve(null);
 
@@ -1584,14 +1583,14 @@ async function handleEvent(event) {
       },
     ]
 
-    const completion = await openai.createChatCompletion({
+    const completion = await openai.chat.completions.create({
       model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini', // 默認使用 'gpt-4o-mini'，如果 .env 中未指定
       temperature: 1,
       messages: messages,
       max_tokens: 1000,
     })
 
-    const echo = { type: 'text', text: completion.data.choices[0].message.content || '抱歉，我沒有話可說了。' }
+    const echo = { type: 'text', text: completion.choices[0].message.content || '抱歉，我沒有話可說了。' }
 
     return client.replyMessage(event.replyToken, [echo])
   } catch (err) {
