@@ -61,7 +61,11 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 奇門遁甲占卜
 - 台灣氣象署天氣特報
 - 台灣法律諮詢（整合台灣法律 LLM）
+- 台灣法律諮詢（整合台灣法律 LLM）
+- 📍 **周邊景點查詢**：傳送位置資訊，查找附近設施
+- 🍲 **大同食譜問問**：詢問大同電鍋食譜（RAG 技術）
 - 支援群組聊天（需要 @ 機器人）
+
 - 通過環境變數配置 API 金鑰
 - 支援 Docker 容器化
 
@@ -112,6 +116,30 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - `!畫圖 一隻可愛的小貓咪在花園裡玩耍`
 - `幫我畫一張美麗的夕陽風景圖`
 - `!image a futuristic city with flying cars`
+
+### 📍 周邊景點查詢（NEW！）
+
+想知道附近有哪些設施？傳送位置給機器人即可！
+
+**使用方式：**
+1. 點選 LINE 輸入框左側的 `+` 號
+2. 選擇「位置資訊」
+3. 選擇並傳送您的位置
+
+**支援查找類別：**
+加油站、超商、餐廳、咖啡廳、停車場、ATM 等。
+
+### 🍲 大同食譜問問（NEW！）
+
+不知道怎麼用電鍋做菜？問問大同食譜助手！
+
+**使用方式：**
+- 輸入 `大同食譜 [想做的菜]`
+- 例如：`大同食譜 電鍋煮飯`、`大同食譜 滷豬腳`
+
+**原理：**
+整合 ChromaDB 向量資料庫，使用 RAG (Retrieval Augmented Generation) 技術檢索專屬食譜資料，再由 GPT 生成回答。
+
 
 ### 📊 功能對比表
 
