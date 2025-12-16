@@ -43,6 +43,10 @@ async function searchNearbyPlaces(latitude, longitude, radius = 1000) {
                 keyword: keyword,
                 language: 'zh-TW',
                 key: process.env.GOOGLE_MAPS_API_KEY
+            },
+            headers: {
+                'Referer': 'https://tbdavid2019.github.io/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
 
