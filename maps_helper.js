@@ -170,3 +170,8 @@ function formatPlacesMessage(places) {
         }
     };
 }
+
+module.exports = {
+    searchNearbyPlaces,
+    formatPlacesMessage
+};

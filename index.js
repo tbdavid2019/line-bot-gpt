@@ -1136,16 +1136,22 @@ ${context}`;
         template: {
           type: 'buttons',
           title: '更多服務',
-          text: '天氣資訊與圖片生成',
+          text: '天氣、圖片生成與生活幫手',
           actions: [
             { label: '天氣特報', type: 'message', text: '天氣特報' },
             { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' },
-            { label: '法律諮詢', type: 'message', text: '法律諮詢' }
+            { label: '法律諮詢', type: 'message', text: '法律諮詢' },
+            { label: '大同電鍋食譜', type: 'message', text: '大同食譜 電鍋煮飯' }
           ],
         },
       }
 
-      return client.replyMessage(event.replyToken, [buttons, buttons2])
+      const hintMessage = {
+        type: 'text',
+        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！\n2. 🍲 想查食譜？請輸入「大同食譜」加上想做的料理，例如：「大同食譜 滷肉」。'
+      }
+
+      return client.replyMessage(event.replyToken, [buttons, buttons2, hintMessage])
     }
 
     // Debug 指令
