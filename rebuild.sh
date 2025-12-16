@@ -1,4 +1,4 @@
-sudo docker build -t line-bot-gpt .
+docker build --network=host -t line-bot-gpt .
 
 sudo docker run -dp 8111:8111 \
   --env-file .env \
@@ -37,6 +37,3 @@ echo "部署完成！"
 echo "健康檢查: curl http://localhost:8111/health"
 # 刪除無用的舊 image
 docker image prune -f
-
-
-pm2 start index2.js --name "my-line-bot"

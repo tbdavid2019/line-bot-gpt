@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # 安裝項目依賴
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # 創建必要的目錄並設置權限
 RUN mkdir -p images test_images && \
