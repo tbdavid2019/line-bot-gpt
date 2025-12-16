@@ -10,7 +10,8 @@ def query_chroma(query_text, n_results=3):
         if not os.path.exists(db_path):
              return json.dumps({"error": "ChromaDB directory not found"})
 
-        client = chromadb.PersistentClient(path=db_path)
+        from chromadb.config import Settings
+        client = chromadb.PersistentClient(path=db_path, settings=Settings(anonymized_telemetry=False))
         
         # We assume the collection name is 'tatung_cookbook' or similar, 
         # but since we don't know for sure, we list collections.
