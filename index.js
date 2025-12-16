@@ -796,14 +796,25 @@ async function handleEvent(event) {
 
     // 取得用戶 ID（統一在此處宣告）
     const userId = event.source.userId || event.source.groupId || event.source.roomId;
+    let userState = userStates.get(userId);
 
-    // 處理大同食譜查詢
-    if (userInput.startsWith('大同食譜')) {
-      const query = userInput.replace('大同食譜', '').trim();
-      if (!query) {
-        return client.replyMessage(event.replyToken, { type: 'text', text: '請輸入您想查詢的食譜，例如：「大同食譜 電鍋煮飯」' });
+    // 進入大同食譜模式
+    if (userInput === '大同食譜') {
+      userStates.set(userId, { state: 'tatung_recipe_mode' });
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '🍲 歡迎來到大同電鍋食譜小幫手！\n\n請直接輸入您想做的料理名稱（例如：「滷肉」、「蒸蛋」）。\n\n若要結束食譜模式，請輸入「退出」。'
+      });
+    }
+
+    // 處理大同食譜模式下的輸入
+    if (userState && userState.state === 'tatung_recipe_mode') {
+      if (userInput === '退出') {
+        userStates.delete(userId);
+        return client.replyMessage(event.replyToken, { type: 'text', text: '已退出食譜模式，回到一般聊天。' });
       }
 
+      const query = userInput.trim();
       await showLoadingAnimation(userId, 20); // 顯示 loading
 
       // Call Python script for RAG
@@ -823,7 +834,7 @@ async function handleEvent(event) {
         pythonProcess.on('close', async (code) => {
           try {
             if (code !== 0) {
-              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢食譜時發生錯誤。' });
+              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢食譜時發生錯誤，請稍後再試。' });
               return resolve(null);
             }
 
@@ -836,7 +847,7 @@ async function handleEvent(event) {
 
             const documents = result.documents || [];
             if (documents.length === 0) {
-              await client.replyMessage(event.replyToken, { type: 'text', text: '抱歉，找不到相關食譜。' });
+              await client.replyMessage(event.replyToken, { type: 'text', text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。' });
               return resolve(null);
             }
 
@@ -870,8 +881,6 @@ ${context}`;
         });
       });
     }
-
-    const userState = userStates.get(userId);
 
     // 處理圖片相關狀態
     if (userState && userState.state === 'waiting_image_action') {
@@ -1141,14 +1150,14 @@ ${context}`;
             { label: '天氣特報', type: 'message', text: '天氣特報' },
             { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' },
             { label: '法律諮詢', type: 'message', text: '法律諮詢' },
-            { label: '大同電鍋食譜', type: 'message', text: '大同食譜 電鍋煮飯' }
+            { label: '大同電鍋食譜', type: 'message', text: '大同食譜' }
           ],
         },
       }
 
       const hintMessage = {
         type: 'text',
-        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！\n2. 🍲 想查食譜？請輸入「大同食譜」加上想做的料理，例如：「大同食譜 滷肉」。'
+        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！\n\n2. 🍲 想查食譜？請點選「大同電鍋食譜」進入專屬模式，隨時可以輸入「退出」來結束。'
       }
 
       return client.replyMessage(event.replyToken, [buttons, buttons2, hintMessage])
