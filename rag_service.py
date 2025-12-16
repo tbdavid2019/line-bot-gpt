@@ -3,6 +3,9 @@ import json
 import chromadb
 import os
 
+# Disable telemetry
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 def query_chroma(query_text, n_results=3):
     try:
         # Check if chroma_db directory exists

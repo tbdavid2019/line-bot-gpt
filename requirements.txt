@@ -1,3 +1,4 @@
-chromadb==0.4.3
+chromadb==0.4.2
 numpy<2.0.0
 openai
+posthog==2.4.2
