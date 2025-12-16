@@ -1157,7 +1157,7 @@ ${context}`;
 
       const hintMessage = {
         type: 'text',
-        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！\n\n2. 🍲 想查食譜？請點選「大同電鍋食譜」進入專屬模式，隨時可以輸入「退出」來結束。'
+        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
       }
 
       return client.replyMessage(event.replyToken, [buttons, buttons2, hintMessage])

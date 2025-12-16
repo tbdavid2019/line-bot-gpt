@@ -2,6 +2,7 @@ import sys
 import json
 import chromadb
 import os
+import google.generativeai as genai
 
 # Disable telemetry
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -13,38 +14,42 @@ def query_chroma(query_text, n_results=3):
         if not os.path.exists(db_path):
              return json.dumps({"error": "ChromaDB directory not found"})
 
+        # Initialize Gemini
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return json.dumps({"error": "GEMINI_API_KEY not set"})
+        
+        genai.configure(api_key=api_key)
+        
+        # Initialize ChromaDB client
         from chromadb.config import Settings
-        client = chromadb.PersistentClient(path=db_path, settings=Settings(anonymized_telemetry=False))
+        client = chromadb.PersistentClient(
+            path=db_path, 
+            settings=Settings(anonymized_telemetry=False)
+        )
         
-        # We assume the collection name is 'tatung_cookbook' or similar, 
-        # but since we don't know for sure, we list collections.
-        # Edit: The unzip output showed a UUID-like folder name inside. 
-        # Chroma usually handles this if we point to the root.
-        # But wait, the zip had 'chroma.sqlite3' at root level of zip?
-        # Let's check the structure after unzip.
-        
-        # Based on unzip output:
-        # tatung_chroma.zip contains:
-        #   41101a4c-dc64-4131-b0d0-86636cad0a44/ (folder)
-        #   chroma.sqlite3
-        #   ...
-        # So we point PersistentClient to the unzip directory.
-        
-        # List collections to find the right one
+        # Get collection
         collections = client.list_collections()
         if not collections:
             return json.dumps({"error": "No collections found in ChromaDB"})
             
-        collection = collections[0] # Assume the first one is the one we want
+        collection = collections[0]  # Use first collection (tatung_recipes)
         
+        # Generate query embedding using Gemini
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=query_text
+        )
+        query_embedding = result['embedding']
+        
+        # Query ChromaDB
         results = collection.query(
-            query_texts=[query_text],
+            query_embeddings=[query_embedding],
             n_results=n_results
         )
         
-        # Extract documents and metadata
+        # Extract documents
         docs = results['documents'][0]
-        # metadatas = results['metadatas'][0] # Optional if we use it
         
         return json.dumps({"documents": docs})
         
@@ -58,3 +63,4 @@ if __name__ == "__main__":
         
     query = sys.argv[1]
     print(query_chroma(query))
+

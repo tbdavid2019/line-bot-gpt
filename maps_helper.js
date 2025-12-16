@@ -1,4 +1,6 @@
 
+const axios = require('axios');
+
 // Google Maps Nearby Search Function
 async function searchNearbyPlaces(latitude, longitude, radius = 1000) {
     try {
