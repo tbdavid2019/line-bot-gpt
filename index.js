@@ -649,15 +649,187 @@ app.post('/callback', line.middleware(config), (req, res) => {
 // event handler
 async function handleEvent(event) {
   try {
+    // 處理 postback 事件（用於地點類型選擇）
+    if (event.type === 'postback') {
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
+      const data = event.postback.data;
+      
+      console.log(`📲 收到 postback: ${data}`);
+      
+      // 處理地點類型選擇
+      if (data.startsWith('place_type=')) {
+        const placeType = data.replace('place_type=', '');
+        const userState = userStates.get(userId);
+        
+        // 檢查狀態是否存在和過期（30 分鐘）
+        const LOCATION_EXPIRE_TIME = 30 * 60 * 1000; // 30 分鐘
+        if (!userState || userState.state !== 'waiting_place_type') {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '⚠️ 位置資訊已過期，請重新分享位置。'
+          });
+        }
+        
+        // 檢查是否超過 30 分鐘
+        if (Date.now() - userState.timestamp > LOCATION_EXPIRE_TIME) {
+          userStates.delete(userId);
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '⚠️ 位置資訊已過期（超過30分鐘），請重新分享位置。'
+          });
+        }
+        
+        const { latitude, longitude } = userState;
+        
+        // 根據類型顯示不同的訊息
+        const typeNames = {
+          'gas_station': '⛽ 加油站',
+          'parking': '🅿️ 停車場',
+          'convenience_store': '🏪 超商',
+          'cafe': '☕ 咖啡廳',
+          'restaurant': '🍴 餐廳',
+          'atm': '🏧 ATM'
+        };
+        
+        console.log(`🔍 搜尋附近的${typeNames[placeType]}...`);
+        
+        // 搜尋指定類型的地點
+        const places = await searchNearbyPlaces(latitude, longitude, placeType);
+        
+        if (places.length === 0) {
+          // 不刪除狀態，讓用戶可以嘗試其他類型
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `附近沒有找到${typeNames[placeType]} 😢\n\n💡 您可以再次分享位置並嘗試其他類型。`
+          });
+        }
+        
+        const flexMessage = formatPlacesMessage(places);
+        
+        // 保留位置資訊，讓用戶可以繼續查詢其他類型
+        // 不刪除 userState，讓位置資訊可以重複使用直到過期
+        
+        // 添加提示訊息
+        const tipMessage = {
+          type: 'text',
+          text: '💡 您可以再次分享位置並選擇其他類型，或在30分鐘內位置資訊會保持有效。'
+        };
+        
+        return client.replyMessage(event.replyToken, [flexMessage, tipMessage]);
+      }
+    }
+    
     // 處理地理位置訊息
     if (event.type === 'message' && event.message.type === 'location') {
       const { latitude, longitude } = event.message;
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
       console.log(`📍 收到位置: ${latitude}, ${longitude}`);
 
-      const places = await searchNearbyPlaces(latitude, longitude);
-      const flexMessage = formatPlacesMessage(places);
+      // 儲存位置資訊
+      userStates.set(userId, {
+        state: 'waiting_place_type',
+        latitude: latitude,
+        longitude: longitude,
+        timestamp: Date.now()
+      });
 
-      return client.replyMessage(event.replyToken, [flexMessage]);
+      // 發送地點類型選擇按鈕
+      const selectPlaceTypeMessage = {
+        type: 'flex',
+        altText: '📍 請選擇您想找的地點類型',
+        contents: {
+          type: 'bubble',
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '請選擇您想找的地點類型',
+                weight: 'bold',
+                size: 'lg',
+                color: '#1DB446'
+              },
+              {
+                type: 'text',
+                text: '收到您的位置！請問您想找什麼呢？',
+                size: 'sm',
+                color: '#999999',
+                margin: 'md'
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '⛽ 加油站',
+                  data: 'place_type=gas_station'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              },
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '🅿️ 停車場',
+                  data: 'place_type=parking'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              },
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '🏪 超商',
+                  data: 'place_type=convenience_store'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              },
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '☕ 咖啡廳',
+                  data: 'place_type=cafe'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              },
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '🍴 餐廳',
+                  data: 'place_type=restaurant'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              },
+              {
+                type: 'button',
+                action: {
+                  type: 'postback',
+                  label: '🏧 ATM',
+                  data: 'place_type=atm'
+                },
+                style: 'primary',
+                color: '#17c1e8'
+              }
+            ]
+          }
+        }
+      };
+
+      return client.replyMessage(event.replyToken, [selectPlaceTypeMessage]);
     }
 
     // 處理圖片訊息
@@ -1151,9 +1323,23 @@ ${context}`;
           title: '更多服務',
           text: '天氣、圖片生成與生活幫手',
           actions: [
+            { label: '📍 找附近設施', type: 'message', text: '找附近設施' },
             { label: '天氣特報', type: 'message', text: '天氣特報' },
             { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' },
-            { label: '法律諮詢', type: 'message', text: '法律諮詢' },
+            { label: '法律諮詢', type: 'message', text: '法律諮詢' }
+          ],
+        },
+      }
+
+      // 第三個按鈕組 - 大同電鍋食譜
+      const buttons3 = {
+        type: 'template',
+        altText: '食譜服務',
+        template: {
+          type: 'buttons',
+          title: '食譜服務',
+          text: '美味料理輕鬆做',
+          actions: [
             { label: '大同電鍋食譜', type: 'message', text: '大同食譜' }
           ],
         },
@@ -1161,10 +1347,31 @@ ${context}`;
 
       const hintMessage = {
         type: 'text',
-        text: '💡 貼心小提示：\n\n1. 📍 傳送「位置資訊」給我，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
+        text: '💡 貼心小提示：\n\n📍 點選「找附近設施」或直接傳送位置資訊，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
       }
 
-      return client.replyMessage(event.replyToken, [buttons, buttons2, hintMessage])
+      return client.replyMessage(event.replyToken, [buttons, buttons2, buttons3, hintMessage])
+    }
+
+    // 找附近設施功能
+    if (userInput === '找附近設施' || userInput === '附近設施' || userInput === '找設施') {
+      const locationRequestMessage = {
+        type: 'text',
+        text: '📍 請分享您的位置\n\n點擊下方按鈕即可快速分享您的所在位置，我會幫您搜尋附近的加油站、超商、餐廳、咖啡廳、停車場和 ATM 等設施！',
+        quickReply: {
+          items: [
+            {
+              type: 'action',
+              action: {
+                type: 'location',
+                label: '📍 分享我的位置'
+              }
+            }
+          ]
+        }
+      };
+
+      return client.replyMessage(event.replyToken, [locationRequestMessage]);
     }
 
     // Debug 指令

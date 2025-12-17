@@ -2,51 +2,42 @@
 const axios = require('axios');
 
 // Google Maps Nearby Search Function
-async function searchNearbyPlaces(latitude, longitude, radius = 1000) {
+async function searchNearbyPlaces(latitude, longitude, placeType = null, radius = 1000) {
     try {
         if (!process.env.GOOGLE_MAPS_API_KEY) {
             console.error('❌ Missing GOOGLE_MAPS_API_KEY');
             return [];
         }
 
-        const types = ['gas_station', 'convenience_store', 'restaurant', 'cafe', 'parking', 'atm'];
-        // Note: 'bento' is not a standard type, we might need to search by keyword if needed, 
-        // but for now we stick to standard types or add 'meal_takeaway'.
-        // Let's iterate through types or make a single broad search if possible, 
-        // but Places API nearby search usually takes one 'type' or 'keyword'.
-        // To get a mix, we might need multiple calls or use a keyword search like "facilities".
-        // Alternatively, we can search for the most important ones.
-        // The user want: 加油站 , 超商, 餐廳 , 咖啡廳, 停車場 , ATM, 便當店.
+        let params = {
+            location: `${latitude},${longitude}`,
+            radius: radius,
+            language: 'zh-TW',
+            key: process.env.GOOGLE_MAPS_API_KEY
+        };
 
-        // Let's implement a "keyword" based search which is more flexible than strict types for "bento".
-        // Or we loop through a simplified list to get a few of each? That might be too many API calls (quota).
-        // Better strategy: Search for "point of interest" with ranking by distance, 
-        // OR just search for one broad type like 'establishment' and filter? No, that's too much data.
-
-        // Compromise: Search for "facilities" using keyword?
-        // Let's try to search by accumulated keywords or just pick top relevant categories.
-        // Actually, the user might want "Nearby" generally. 
-        // Let's try to search for "food" (Restaurant/Cafe/Bento), "store" (Convenience), "finance" (ATM), "transport" (Gas/Parking).
-
-        // Let's make it simple: Search for "prominent places" or just one generic call?
-        // The prompt says: "加油站 , 超商, 餐廳 , 咖啡廳, 停車場 , ATM, 便當店"
-        // We can do a `nearbysearch` with `keyword` = "加油站 OR 超商 OR 餐廳 OR 咖啡廳 OR 停車場 OR ATM OR 便當店" ??
-        // Google Places API text search supports queries like this better than nearby search.
-        // But `nearbysearch` with `keyword` is supported.
-
-        const keyword = '加油站 OR 超商 OR 餐廳 OR 咖啡廳 OR 停車場 OR ATM OR 便當店';
+        // 如果指定了地點類型，使用 type 參數
+        if (placeType) {
+            params.type = placeType;
+        } else {
+            // 否則使用關鍵字搜尋多種類型
+            params.keyword = '加油站 OR 超商 OR 餐廳 OR 咖啡廳 OR 停車場 OR ATM OR 便當店';
+        }
 
         const response = await axios.get('https://maps.googleapis.com/maps/api/place/nearbysearch/json', {
-            params: {
-                location: `${latitude},${longitude}`,
-                radius: radius,
-                keyword: keyword,
-                language: 'zh-TW',
-                key: process.env.GOOGLE_MAPS_API_KEY
-            },
+            params: params,
             headers: {
+                'Accept': 'application/json',
+                'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Referer': 'https://tbdavid2019.github.io/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'Origin': 'https://tbdavid2019.github.io',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'cross-site',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
             }
         });
 

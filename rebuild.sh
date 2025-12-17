@@ -35,5 +35,9 @@ docker-compose logs --tail=50 line-bot
 
 echo "部署完成！"
 echo "健康檢查: curl http://localhost:8111/health"
-# 刪除無用的舊 image
+
+
+# 安全日常清潔
 docker image prune -f
+docker builder prune -f
+
