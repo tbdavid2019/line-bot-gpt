@@ -2,24 +2,35 @@ import sys
 import json
 import chromadb
 import os
-import google.generativeai as genai
+from openai import OpenAI
 
 # Disable telemetry
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-def query_chroma(query_text, n_results=3):
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=os.environ.get("OPEN_AI_LINE_SECRET"))
+
+def get_openai_embedding(text):
+    """使用 OpenAI 生成 embedding"""
+    try:
+        response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        raise Exception(f"OpenAI embedding failed: {str(e)}")
+
+def query_chroma(query_text, n_results=5):
     try:
         # Check if chroma_db directory exists
         db_path = "./chroma_db"
         if not os.path.exists(db_path):
              return json.dumps({"error": "ChromaDB directory not found"})
-
-        # Initialize Gemini
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            return json.dumps({"error": "GEMINI_API_KEY not set"})
         
-        genai.configure(api_key=api_key)
+        # Check OpenAI API key
+        if not os.environ.get("OPEN_AI_LINE_SECRET"):
+            return json.dumps({"error": "OPEN_AI_LINE_SECRET not set"})
         
         # Initialize ChromaDB client
         from chromadb.config import Settings
@@ -33,25 +44,27 @@ def query_chroma(query_text, n_results=3):
         if not collections:
             return json.dumps({"error": "No collections found in ChromaDB"})
             
-        collection = collections[0]  # Use first collection (tatung_recipes)
+        collection = collections[0]
         
-        # Generate query embedding using Gemini
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=query_text
-        )
-        query_embedding = result['embedding']
+        # 生成查詢的 embedding
+        query_embedding = get_openai_embedding(query_text)
         
-        # Query ChromaDB
+        # 使用 embedding 查詢
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results
         )
         
-        # Extract documents
-        docs = results['documents'][0]
+        # Extract documents and distances
+        docs = results['documents'][0] if results['documents'] else []
+        distances = results.get('distances', [[]])[0]
         
-        return json.dumps({"documents": docs})
+        return json.dumps({
+            "documents": docs,
+            "distances": distances,
+            "query": query_text,
+            "method": "openai_embedding"
+        })
         
     except Exception as e:
         return json.dumps({"error": str(e)})

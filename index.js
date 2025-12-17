@@ -160,7 +160,7 @@ function detectImageIntent(text) {
 // 圖片分析功能（使用 Gemini Vision，純文字輸出）
 async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
   try {
-    const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash';
+    const model = process.env.GEMINI_VISION_MODEL || 'gemini-flash-latest';
     const userPrompt = prompt || '請詳細描述這張圖片的內容，包括主要物體、場景、顏色、氛圍等';
 
     console.log(`🔍 使用 ${model} 分析圖片...`);
@@ -991,61 +991,120 @@ async function handleEvent(event) {
 
       // Call Python script for RAG
       return new Promise((resolve, reject) => {
-        const pythonProcess = spawn('./venv/bin/python', ['rag_service.py', query], {
-          encoding: 'utf-8'
+        const pythonPath = process.env.PYTHON_PATH || './venv/bin/python';
+        const ragScriptPath = process.env.RAG_SCRIPT_PATH || 'rag_service.py';
+        
+        console.log(`🔍 大同食譜查詢: "${query}"`);
+        console.log(`📂 Python 路徑: ${pythonPath}`);
+        console.log(`📂 RAG 腳本路徑: ${ragScriptPath}`);
+        
+        const pythonProcess = spawn(pythonPath, [ragScriptPath, query], {
+          encoding: 'utf-8',
+          cwd: process.cwd() // 確保工作目錄正確
         });
 
         let dataString = '';
+        let errorString = '';
 
         pythonProcess.stdout.setEncoding('utf8');
         pythonProcess.stdout.on('data', (data) => {
+          console.log(`📤 Python stdout: ${data}`);
           dataString += data.toString();
         });
 
         pythonProcess.stderr.setEncoding('utf8');
         pythonProcess.stderr.on('data', (data) => {
-          console.error(`Python Error: ${data}`);
+          console.error(`⚠️ Python stderr: ${data}`);
+          errorString += data.toString();
         });
 
         pythonProcess.on('close', async (code) => {
+          console.log(`🔚 Python process 結束，exit code: ${code}`);
+          console.log(`📊 收到的資料長度: ${dataString.length} bytes`);
+          
           try {
             if (code !== 0) {
-              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢食譜時發生錯誤，請稍後再試。' });
+              console.error(`❌ Python 執行失敗，exit code: ${code}`);
+              console.error(`❌ Error output: ${errorString}`);
+              await client.replyMessage(event.replyToken, { 
+                type: 'text', 
+                text: `查詢食譜時發生錯誤。\n\n錯誤詳情：\n${errorString.substring(0, 200)}` 
+              });
               return resolve(null);
             }
 
+            if (!dataString.trim()) {
+              console.error('❌ Python 沒有返回任何資料');
+              await client.replyMessage(event.replyToken, { 
+                type: 'text', 
+                text: '查詢食譜時沒有收到回應，請稍後再試。' 
+              });
+              return resolve(null);
+            }
+
+            console.log(`📝 準備解析 JSON: ${dataString.substring(0, 200)}...`);
             const result = JSON.parse(dataString);
+            
             if (result.error) {
               console.error('RAG Error:', result.error);
-              await client.replyMessage(event.replyToken, { type: 'text', text: '查詢數據庫時發生錯誤。' });
+              await client.replyMessage(event.replyToken, { 
+                type: 'text', 
+                text: `查詢數據庫時發生錯誤：${result.error}` 
+              });
               return resolve(null);
             }
 
             const documents = result.documents || [];
+            const distances = result.distances || [];
+            const searchMethod = result.method || 'unknown';
+            console.log(`✅ 找到 ${documents.length} 筆食譜資料 (搜尋方式: ${searchMethod})`);
+            if (documents.length > 0) {
+              console.log(`📋 第一筆資料預覽: ${documents[0].substring(0, 150)}...`);
+              if (distances.length > 0 && searchMethod === 'vector_search') {
+                console.log(`📊 相似度分數 (越小越相似): ${distances.slice(0, 3).map((d, i) => `[${i+1}] ${d.toFixed(4)}`).join(', ')}`);
+              }
+            }
+            
             if (documents.length === 0) {
-              await client.replyMessage(event.replyToken, { type: 'text', text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。' });
+              await client.replyMessage(event.replyToken, { 
+                type: 'text', 
+                text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。' 
+              });
               return resolve(null);
             }
 
             // Generate answer with GPT-4
             const context = documents.join('\n\n');
-            const systemPrompt = `你是一個專業的大同電鍋食譜助手。請根據以下參考資料回答使用者的問題。如果參考資料中沒有相關資訊，請誠實告知。
-                
+            console.log(`📄 Context 長度: ${context.length} 字元`);
+            
+            const systemPrompt = `你是一個專業的大同電鍋食譜助手。
+
+重要規則：
+1. 只能使用下方「參考資料」中的食譜內容來回答
+2. 如果參考資料與使用者問題不相關，請明確告知「資料庫中沒有相關食譜」
+3. 絕對不要自己編造或建議食譜內容
+4. 只整理和呈現參考資料中的資訊
+
 參考資料：
 ${context}`;
 
-            const userPrompt = `使用者問題：${query}`;
+            const userPrompt = `請根據上述參考資料，回答以下問題：${query}`;
 
+            console.log(`🤖 準備呼叫 GPT，query: "${query}"`);
+            
             const completion = await openai.chat.completions.create({
-              model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
+              model: process.env.OPEN_AI_MODEL || 'gpt-4o',
               messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
               ],
               max_tokens: 1000,
+              temperature: 0.3 // 降低溫度，減少創造性
             });
 
             const replyText = completion.choices[0].message.content;
+            console.log(`✅ GPT 回應長度: ${replyText.length} 字元`);
+            console.log(`📝 GPT 回應預覽: ${replyText.substring(0, 100)}...`);
             await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
             resolve(null);
 
@@ -1345,12 +1404,12 @@ ${context}`;
         },
       }
 
-      const hintMessage = {
-        type: 'text',
-        text: '💡 貼心小提示：\n\n📍 點選「找附近設施」或直接傳送位置資訊，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
-      }
+      // const hintMessage = {
+      //   type: 'text',
+      //   text: '💡 貼心小提示：\n\n📍 點選「找附近設施」或直接傳送位置資訊，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
+      // }
 
-      return client.replyMessage(event.replyToken, [buttons, buttons2, buttons3, hintMessage])
+      return client.replyMessage(event.replyToken, [buttons, buttons2, buttons3])
     }
 
     // 找附近設施功能

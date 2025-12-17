@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-大同食譜資料庫重建腳本（本地版本）
-使用最新穩定版本的 ChromaDB 和 Google GenAI
+大同食譜資料庫重建腳本
+使用 OpenAI Embedding (對繁體中文友善)
 
 使用方法：
-1. 確保已安裝：pip install google-genai==0.8.3 chromadb==0.4.22 beautifulsoup4 lxml tqdm requests
-2. 設定 GEMINI_API_KEY 環境變數
+1. 確保已安裝：pip install chromadb==0.4.22 beautifulsoup4 lxml tqdm requests openai
+2. 設定 OPEN_AI_LINE_SECRET 環境變數
 3. 執行：python rebuild_chromadb.py
 """
 
@@ -16,22 +16,34 @@ import time
 import random
 import requests
 import chromadb
-import google.generativeai as genai
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import re
+from openai import OpenAI
 
 # ========= 設定 =========
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("請設定 GEMINI_API_KEY 環境變數")
-
 PERSIST_DIR = "./chroma_db"
 COLLECTION_NAME = "tatung_recipes"
 OUT_JSONL = "./tatung_recipes_51_634.jsonl"
 
-# ========= 初始化 Gemini Client =========
-genai.configure(api_key=GEMINI_API_KEY)
+# Initialize OpenAI client
+OPENAI_API_KEY = os.environ.get("OPEN_AI_LINE_SECRET")
+if not OPENAI_API_KEY:
+    raise ValueError("請設定 OPEN_AI_LINE_SECRET 環境變數")
+
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+def get_openai_embeddings_batch(texts):
+    """使用 OpenAI 批次生成 embeddings"""
+    try:
+        response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=texts
+        )
+        return [item.embedding for item in response.data]
+    except Exception as e:
+        print(f"⚠️ OpenAI embedding 錯誤: {e}")
+        raise
 
 # ========= HTML 抓取 =========
 def fetch_html(url: str) -> str:
@@ -217,41 +229,24 @@ def to_chunks(recipe):
 def main():
     print("🚀 開始重建大同食譜資料庫...\n")
     
-    # 1. 生成 URL 列表
-    BASE = "http://cooking.tatung.com.tw/Home/Recipes/{}"
-    URLS = [BASE.format(i) for i in range(51, 635)]
-    print(f"📋 共 {len(URLS)} 個食譜頁面需要抓取\n")
+    # 檢查 JSONL 檔案是否存在
+    if not os.path.exists(OUT_JSONL):
+        print(f"❌ 找不到 {OUT_JSONL} 檔案")
+        print("請先準備好食譜 JSONL 檔案")
+        return
     
-    # 2. 抓取並解析食譜（儲存到 JSONL）
-    done_urls = load_done_urls(OUT_JSONL)
-    print(f"✅ 已完成: {len(done_urls)} 個食譜")
+    print(f"✅ 找到食譜檔案: {OUT_JSONL}")
     
-    fail_log = []
+    # 計算食譜數量
+    recipe_count = 0
+    with open(OUT_JSONL, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                recipe_count += 1
     
-    for url in tqdm(URLS, desc="📥 抓取食譜"):
-        if url in done_urls:
-            continue
-        
-        try:
-            html = fetch_html_retry(url, retries=3)
-            recipe = parse_recipe(url, html)
-            
-            # 品質檢查
-            if len(recipe.get("title","")) < 2 or len(recipe.get("steps","")) < 20:
-                raise RuntimeError("parsed too short")
-            
-            append_jsonl(OUT_JSONL, recipe)
-            done_urls.add(url)
-            
-            time.sleep(random.uniform(0.2, 0.6))
-            
-        except Exception as e:
-            fail_log.append((url, str(e)))
-            time.sleep(random.uniform(0.8, 1.5))
+    print(f"📋 共有 {recipe_count} 個食譜\n")
     
-    print(f"\n✅ 抓取完成: {len(done_urls)} 成功, {len(fail_log)} 失敗\n")
-    
-    # 3. 建立 ChromaDB
+    # 直接建立 ChromaDB（跳過抓取步驟）
     print("🔧 建立 ChromaDB...")
     
     # 關閉 telemetry
@@ -265,10 +260,11 @@ def main():
     except:
         pass
     
+    # 建立 collection（不指定 embedding function，手動提供 embeddings）
     col = chroma.create_collection(name=COLLECTION_NAME)
     
     # 4. Ingest 到 ChromaDB
-    BATCH = 16
+    BATCH = 20  # OpenAI API 批次處理
     to_ids, to_docs, to_metas = [], [], []
     count_read = 0
     count_added = 0
@@ -297,24 +293,26 @@ def main():
                 })
             
             if len(to_docs) >= BATCH:
-                embs = gemini_embed_batch(to_docs)
+                # 使用 OpenAI 生成 embeddings
+                embeddings = get_openai_embeddings_batch(to_docs)
                 col.add(
                     ids=to_ids,
                     documents=to_docs,
                     metadatas=to_metas,
-                    embeddings=embs
+                    embeddings=embeddings
                 )
                 count_added += len(to_docs)
                 to_ids, to_docs, to_metas = [], [], []
+                time.sleep(0.5)  # 避免 rate limit
     
     # Flush 剩餘
     if to_docs:
-        embs = gemini_embed_batch(to_docs)
+        embeddings = get_openai_embeddings_batch(to_docs)
         col.add(
             ids=to_ids,
             documents=to_docs,
             metadatas=to_metas,
-            embeddings=embs
+            embeddings=embeddings
         )
         count_added += len(to_docs)
     
