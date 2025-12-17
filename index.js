@@ -973,10 +973,74 @@ async function handleEvent(event) {
     // 進入大同食譜模式
     if (userInput === '大同食譜') {
       userStates.set(userId, { state: 'tatung_recipe_mode' });
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: '🍲 歡迎來到大同電鍋食譜小幫手！\n\n請直接輸入您想做的料理名稱（例如：「滷肉」、「蒸蛋」）。\n\n若要結束食譜模式，請輸入「退出」。'
-      });
+      const welcomeMessage = {
+        type: 'flex',
+        altText: '🍲 大同電鍋食譜小幫手',
+        contents: {
+          type: 'bubble',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '🍲 大同電鍋食譜',
+                weight: 'bold',
+                size: 'xl',
+                color: '#FF6B35'
+              }
+            ]
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '歡迎來到大同電鍋食譜小幫手！',
+                weight: 'bold',
+                size: 'md',
+                margin: 'md'
+              },
+              {
+                type: 'separator',
+                margin: 'md'
+              },
+              {
+                type: 'text',
+                text: '請直接輸入您想做的料理名稱：',
+                size: 'sm',
+                margin: 'md',
+                color: '#555555'
+              },
+              {
+                type: 'text',
+                text: '• 滷肉\n• 蒸蛋\n• 排骨湯\n• 紅燒肉',
+                size: 'sm',
+                color: '#999999',
+                margin: 'sm'
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'button',
+                action: {
+                  type: 'message',
+                  label: '🚪 退出食譜模式',
+                  text: '退出'
+                },
+                style: 'secondary',
+                height: 'sm'
+              }
+            ]
+          }
+        }
+      };
+      return client.replyMessage(event.replyToken, welcomeMessage);
     }
 
     // 處理大同食譜模式下的輸入
@@ -1105,7 +1169,74 @@ ${context}`;
             const replyText = completion.choices[0].message.content;
             console.log(`✅ GPT 回應長度: ${replyText.length} 字元`);
             console.log(`📝 GPT 回應預覽: ${replyText.substring(0, 100)}...`);
-            await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+            
+            // 使用 Flex Message 回覆，包含退出按鈕
+            const replyMessage = {
+              type: 'flex',
+              altText: '🍲 大同電鍋食譜',
+              contents: {
+                type: 'bubble',
+                header: {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: '🍲 大同電鍋食譜',
+                      weight: 'bold',
+                      size: 'md',
+                      color: '#FF6B35'
+                    }
+                  ],
+                  paddingAll: 'sm'
+                },
+                body: {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: replyText,
+                      wrap: true,
+                      size: 'sm'
+                    }
+                  ]
+                },
+                footer: {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: [
+                    {
+                      type: 'box',
+                      layout: 'horizontal',
+                      contents: [
+                        {
+                          type: 'text',
+                          text: '💡 繼續輸入料理名稱查詢',
+                          size: 'xs',
+                          color: '#999999',
+                          flex: 1
+                        }
+                      ],
+                      margin: 'sm'
+                    },
+                    {
+                      type: 'button',
+                      action: {
+                        type: 'message',
+                        label: '🚪 退出食譜模式',
+                        text: '退出'
+                      },
+                      style: 'secondary',
+                      height: 'sm',
+                      margin: 'md'
+                    }
+                  ]
+                }
+              }
+            };
+            
+            await client.replyMessage(event.replyToken, replyMessage);
             resolve(null);
 
           } catch (error) {

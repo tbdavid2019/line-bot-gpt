@@ -15,6 +15,12 @@ echo "📥 安裝 Python 套件..."
 source venv/bin/activate
 pip install -q -r requirements.txt
 
+# 載入環境變數
+if [ -f .env ]; then
+    echo "📋 載入環境變數..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # 建立 ChromaDB
 echo "🗃️  開始建立 ChromaDB..."
 python rebuild_chromadb.py

@@ -29,14 +29,8 @@ RUN python3 -m venv venv && \
 RUN mkdir -p images test_images && \
   chown -R node:node images test_images
 
-# 將源代碼複製到容器中
+# 將源代碼複製到容器中（包含 chroma_db 如果存在的話）
 COPY --chown=node:node . .
-
-# 複製 Google Cloud 金鑰檔案
-COPY --chown=node:node service-account-key.json* ./
-
-# 複製預先建立好的 ChromaDB（如果存在）
-COPY --chown=node:node chroma_db* ./chroma_db/ 2>/dev/null || true
 
 # 切換到非 root 用戶
 USER node
