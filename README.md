@@ -44,14 +44,14 @@ https://liff.line.me/1645278921-kWRPP32q/?accountId=728wsrjq
 
 ## 專案簡介 (Project Introduction)
 
-此專案是一個基於 [LINE Messaging API](https://developers.line.biz/en/docs/messaging-api/) 的 Line Bot，並整合了 [OpenAI GPT-5](https://openai.com/) 來處理用戶的對話內容。
+此專案是一個基於 [LINE Messaging API](https://developers.line.biz/en/docs/messaging-api/) 的 Line Bot，並整合了 [OpenAI GPT-4o](https://openai.com/) 來處理用戶的對話內容。
 
-This project is a Line Bot based on the [LINE Messaging API](https://developers.line.biz/en/docs/messaging-api/), integrated with [OpenAI GPT-4](https://openai.com/) to handle user conversations.
+This project is a Line Bot based on the [LINE Messaging API](https://developers.line.biz/en/docs/messaging-api/), integrated with [OpenAI GPT-4o](https://openai.com/) to handle user conversations.
 
 ## 功能 (Features)
 
-- 整合 OpenAI GPT-4 聊天機器人
-- 整合 Google Gemini Flash Latest AI 視覺功能
+- 整合 OpenAI GPT-4o 聊天機器人
+- 整合 Google Gemini 2.5 Flash AI 視覺功能
   - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
   - ✏️ **圖片編輯**：基於現有圖片進行 AI 編輯
   - 🎨 **文字生成圖片**：從文字描述生成全新圖片
@@ -68,7 +68,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 通過環境變數配置 API 金鑰
 - 支援 Docker 容器化
 
-### 🔍 圖片分析功能（NEW！）
+### 🔍 圖片分析功能
 
 讓 AI 幫你「看圖說話」，分析圖片內容並回答問題。
 
@@ -85,7 +85,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 **自動觸發關鍵字：**
 這是什麼、分析、看圖、描述、辨識、有什麼、what is、describe 等
 
-### ✏️ 圖片編輯功能（NEW！）
+### ✏️ 圖片編輯功能
 
 基於現有圖片進行 AI 編輯，改變風格、背景或添加元素。
 
@@ -116,7 +116,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - `幫我畫一張美麗的夕陽風景圖`
 - `!image a futuristic city with flying cars`
 
-### 📍 周邊設施查詢（NEW！）
+### 📍 周邊設施查詢
 
 想知道附近有哪些設施？傳送位置給機器人即可！
 
@@ -140,7 +140,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 📊 包含評分、距離、營業時間等資訊
 - 🔗 可直接開啟 Google Maps 導航
 
-### 🍲 大同電鍋食譜助手（NEW！）
+### 🍲 大同電鍋食譜助手
 
 不知道怎麼用電鍋做菜？問問大同食譜助手！
 
@@ -172,20 +172,18 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 
 ---
 
-- Integrated with OpenAI GPT-4 chatbot
+- Integrated with OpenAI GPT-4o chatbot
 - Integrated with Google Gemini 2.5 Flash AI Vision features
-  - 🔍 **Image Analysis**: Upload images for AI content analysis
-  - ✏️ **Image Editing**: AI-powered editing of existing images
-  - 🎨 **Text-to-Image**: Generate new images from text descriptions
-- Answer Book divination service
-- Random Tang poetry recommendations
-- Asakusa temple fortune slips
+- Image analysis, editing, and text-to-image generation
+- Fortune telling services (Answer Book, Tang Poetry, Asakusa Fortune)
 - Qimen Dunjia divination
 - Taiwan weather alerts
 - Taiwan legal consultation (integrated with Taiwan Legal LLM)
+- Nearby facilities search (gas stations, restaurants, cafes, etc.)
+- Tatung rice cooker recipe assistant with RAG technology
 - Group chat support (requires @ mention)
-- OpenAI and LINE API keys are configured via environment variables
-- Supports Docker containerization
+- Environment variables configuration
+- Docker containerization
 
 ## 文檔指南 (Documentation Guide)
 
@@ -367,20 +365,25 @@ PORT=8111
    docker pull tbdavid2019/line-bot-gpt:latest
    ```
 
-2. 設定環境變數（可以 `mv example.env .env`）
+2. 設定環境變數：
+   ```bash
+   mv example.env .env
+   # 編輯 .env 填入您的 API Keys
+   ```
 
-3. 啟動容器：
+3. **建立 ChromaDB 資料庫（僅首次需要）：**
+   ```bash
+   # 需要先有 tatung_recipes_51_634.jsonl 和 rebuild_chromadb.py
+   bash build_chromadb_local.sh
+   ```
+   > ⏱️ 此步驟約需 2-3 分鐘，會在 host 主機建立 `chroma_db/` 資料夾
+
+4. 啟動容器：
    ```bash
    docker run -dp 8111:8111 --env-file .env --name line-bot-gpt tbdavid2019/line-bot-gpt:latest
    ```
 
-4. **建立 ChromaDB 資料庫（僅首次需要）：**
-   ```bash
-   docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rebuild_chromadb.py
-   ```
-   > ⏱️ 此步驟約需 2-3 分鐘，會使用 OpenAI API 生成 embeddings
-
-**方式 B：本地建置映像**
+**方式 B：本地建置映像（推薦）**
 
 1. 克隆專案：
    ```bash
@@ -388,36 +391,56 @@ PORT=8111
    cd line-bot-gpt
    ```
 
-2. 設定 `.env` 文件
+2. 設定環境變數：
+   ```bash
+   mv example.env .env
+   # 編輯 .env 填入您的 API Keys
+   ```
 
-3. 使用快速部署腳本：
+3. **建立 ChromaDB 資料庫（僅首次需要）：**
+   ```bash
+   bash build_chromadb_local.sh
+   ```
+   > 💡 這會在 host 主機建立 `chroma_db/` 資料夾，約需 2-3 分鐘
+
+4. 部署容器（ChromaDB 會自動複製進容器）：
    ```bash
    bash rebuild.sh
    ```
-   或手動執行：
-   ```bash
-   # 建置映像
-   docker build -t line-bot-gpt .
-   
-   # 啟動容器
-   docker run -dp 8111:8111 --env-file .env --name line-bot-gpt --restart unless-stopped line-bot-gpt
-   
-   # 建立 ChromaDB（僅首次需要）
-   docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rebuild_chromadb.py
-   ```
+
+**手動執行步驟：**
+```bash
+# 建置映像
+docker build -t line-bot-gpt .
+
+# 啟動容器
+docker run -dp 8111:8111 --env-file .env --name line-bot-gpt --restart unless-stopped line-bot-gpt
+```
 
 ### 📝 重要提醒
 
-1. **ChromaDB 建立**：
-   - 只需執行一次，之後更新程式碼不需要重建
-   - 如需更新食譜資料庫，再次執行 rebuild_chromadb.py 即可
+1. **ChromaDB 建立（新方式！）**：
+   - ✅ **在 host 主機建立**：使用 `bash build_chromadb_local.sh`
+   - ✅ **只需執行一次**：建立後會自動複製進容器
+   - ✅ **可重複使用**：之後更新程式碼不需要重建
+   - 🔄 **更新食譜**：修改 JSONL 後重新執行 `bash build_chromadb_local.sh`
 
-2. **環境變數檢查**：
+2. **部署流程**：
+   ```bash
+   # 首次部署
+   bash build_chromadb_local.sh  # 建立 ChromaDB（約 2-3 分鐘）
+   bash rebuild.sh              # 部署容器
+   
+   # 之後更新程式碼
+   bash rebuild.sh              # 直接部署即可
+   ```
+
+3. **環境變數檢查**：
    - `OPEN_AI_LINE_SECRET` 必須設定（用於對話、圖片生成、食譜 RAG）
    - `GEMINI_API_KEY` 用於圖片分析功能
    - `GOOGLE_MAPS_API_KEY` 用於周邊設施查詢
 
-3. **健康檢查**：
+4. **健康檢查**：
    ```bash
    curl http://localhost:8111/health
    ```
@@ -440,7 +463,8 @@ line-bot-gpt/
 ├── 🐳 Docker 相關
 │   ├── Dockerfile                  # Docker 映像建置檔案
 │   ├── docker-compose.yml          # Docker Compose 設定
-│   └── rebuild.sh                  # 快速重新部署腳本
+│   ├── rebuild.sh                  # 快速重新部署腳本
+│   └── build_chromadb_local.sh     # 在 host 主機建立 ChromaDB（新）
 │
 ├── 🍲 大同食譜 RAG 功能
 │   ├── rag_service.py              # RAG 查詢服務（Python）
@@ -505,46 +529,75 @@ line-bot-gpt/
 
 ### 大同食譜 RAG 功能
 
-**首次部署步驟：**
+**首次部署步驟（優化流程）：**
 
 1. **確保環境變數設定完整**：
    ```bash
    OPEN_AI_LINE_SECRET=your_openai_api_key  # 必須！用於生成 embeddings
    ```
 
-2. **啟動容器**：
+2. **在 host 主機建立 ChromaDB**（只需一次）：
    ```bash
-   docker run -dp 8111:8111 --env-file .env --name line-bot-gpt --restart unless-stopped line-bot-gpt
-   ```
-
-3. **建立 ChromaDB 資料庫**（僅首次需要）：
-   ```bash
-   docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rebuild_chromadb.py
+   bash build_chromadb_local.sh
    ```
    > ⏱️ 約需 2-3 分鐘，會處理 584 個食譜並生成 embeddings
+   > 💡 建立完成後會產生 `chroma_db/` 資料夾
 
-4. **驗證功能**：
+3. **部署容器**（ChromaDB 會自動複製進容器）：
    ```bash
-   # 測試查詢
-   docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rag_service.py "蒸蛋"
+   bash rebuild.sh
    ```
+
+**之後更新程式碼：**
+```bash
+# 不需要重建 ChromaDB，直接部署即可
+bash rebuild.sh
+```
+
+**更新食譜資料：**
+```bash
+# 編輯 tatung_recipes_51_634.jsonl 後
+bash build_chromadb_local.sh  # 重新建立 ChromaDB
+bash rebuild.sh              # 重新部署
+```
+
+**驗證功能：**
+
+測試 ChromaDB 是否正常運作：
+```bash
+# 在 host 主機測試（建立後）
+source venv/bin/activate
+python rag_service.py "蒸蛋"
+
+# 在容器內測試（部署後）
+docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rag_service.py "蒸蛋"
+```
 
 **RAG 技術架構：**
 - 📚 **向量資料庫**：ChromaDB 0.4.22
 - 🤖 **Embedding 模型**：OpenAI text-embedding-3-small（1536 維）
 - 🇹🇼 **中文優化**：專為繁體中文語義搜尋優化
 - 📊 **資料規模**：584 個食譜，約 3400+ 個文本片段
+- 🔍 **檢索數量**：每次查詢返回 10 個最相關片段
 - ⚡ **查詢速度**：向量搜尋 < 100ms，完整回應 < 3 秒
 
 **常見問題：**
 
-Q: 為什麼要用 OpenAI Embedding？
+Q: 為什麼要用 OpenAI Embedding？  
 A: 對繁體中文語義理解最好，能正確理解「蒸蛋」、「滷肉」等詞彙
 
-Q: 可以更新食譜資料嗎？
-A: 可以！編輯 `tatung_recipes_51_634.jsonl`，然後重新執行 `rebuild_chromadb.py`
+Q: 可以更新食譜資料嗎？  
+A: 可以！編輯 `tatung_recipes_51_634.jsonl`，然後執行 `bash build_chromadb_local.sh`
 
-Q: 建立 ChromaDB 需要多久？
+Q: 建立 ChromaDB 需要多久？  
 A: 約 2-3 分鐘，取決於網路速度（需呼叫 OpenAI API）
+
+Q: 為什麼改成在 host 主機建立 ChromaDB？  
+A: ✅ 更快速：不用等容器啟動  
+A: ✅ 可重用：一次建立，多次部署都能用  
+A: ✅ 更穩定：建立過程在 host 環境，更容易除錯
+
+Q: 部署時 ChromaDB 會自動複製嗎？  
+A: 會！Dockerfile 會自動把 `chroma_db/` 資料夾複製進容器
 
 ---

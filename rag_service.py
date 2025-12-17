@@ -21,7 +21,7 @@ def get_openai_embedding(text):
     except Exception as e:
         raise Exception(f"OpenAI embedding failed: {str(e)}")
 
-def query_chroma(query_text, n_results=5):
+def query_chroma(query_text, n_results=10):
     try:
         # Check if chroma_db directory exists
         db_path = "./chroma_db"

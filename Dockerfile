@@ -35,8 +35,8 @@ COPY --chown=node:node . .
 # 複製 Google Cloud 金鑰檔案
 COPY --chown=node:node service-account-key.json* ./
 
-# 注意：ChromaDB 需要在容器啟動後手動建立
-# 執行：docker exec line-bot-gpt /usr/src/app/venv/bin/python /usr/src/app/rebuild_chromadb.py
+# 複製預先建立好的 ChromaDB（如果存在）
+COPY --chown=node:node chroma_db* ./chroma_db/ 2>/dev/null || true
 
 # 切換到非 root 用戶
 USER node
