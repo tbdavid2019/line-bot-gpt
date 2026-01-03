@@ -11,6 +11,8 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { searchNearbyPlaces, formatPlacesMessage } = require('./maps_helper')
+const { v4: uuidv4 } = require('uuid')
+const Groq = require('groq-sdk')
 
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
@@ -56,6 +58,19 @@ if (process.env.GOOGLE_CLOUD_PROJECT_ID && process.env.GOOGLE_CLOUD_BUCKET_NAME)
     console.log('✅ Google Cloud Storage 已初始化');
   } catch (error) {
     console.error('❌ Google Cloud Storage 初始化失敗:', error.message);
+  }
+}
+
+// 初始化 Groq 客戶端 (用於 ASR)
+let groq = null;
+if (process.env.ASR_API_GROQ_KEY) {
+  try {
+    groq = new Groq({
+      apiKey: process.env.ASR_API_GROQ_KEY,
+    });
+    console.log('✅ Groq Whisper ASR 已初始化');
+  } catch (error) {
+    console.error('❌ Groq 初始化失敗:', error.message);
   }
 }
 
@@ -111,6 +126,114 @@ async function downloadImageFromLine(messageId) {
     console.error('❌ 下載圖片失敗:', error);
     return null;
   }
+}
+
+// 從 LINE 下載音訊內容
+async function downloadAudioFromLine(messageId) {
+  try {
+    const stream = await client.getMessageContent(messageId);
+    const chunks = [];
+
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+    console.log(`✅ 成功下載音訊，大小: ${buffer.length} bytes`);
+    return buffer;
+  } catch (error) {
+    console.error('❌ 下載音訊失敗:', error);
+    return null;
+  }
+}
+
+// 使用 Groq Whisper 轉錄音訊
+async function transcribeAudioWithGroq(audioBuffer) {
+  try {
+    if (!groq) {
+      console.log('⚠️ Groq 客戶端未初始化');
+      return null;
+    }
+
+    // 將 buffer 寫入臨時檔案（Groq SDK 需要檔案路徑）
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const tempFilePath = path.join(tempDir, `audio_${Date.now()}.m4a`);
+    fs.writeFileSync(tempFilePath, audioBuffer);
+
+    console.log('🎤 使用 Groq Whisper 轉錄音訊...');
+    const transcription = await groq.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath),
+      model: "whisper-large-v3",
+      temperature: 0,
+      response_format: "verbose_json"
+    });
+
+    // 刪除臨時檔案
+    fs.unlinkSync(tempFilePath);
+
+    console.log(`✅ Groq 轉錄成功: ${transcription.text}`);
+    return transcription.text;
+  } catch (error) {
+    console.error('❌ Groq 轉錄失敗:', error);
+    return null;
+  }
+}
+
+// 使用 Gemini 轉錄音訊
+async function transcribeAudioWithGemini(audioBuffer) {
+  try {
+    if (!genAI) {
+      console.log('⚠️ Gemini 客戶端未初始化');
+      return null;
+    }
+
+    console.log('🎤 使用 Gemini ASR 轉錄音訊...');
+    const response = await genAI.models.generateContent({
+      model: "gemini-2.0-flash-exp",
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: audioBuffer.toString('base64'),
+              mimeType: 'audio/m4a'
+            }
+          },
+          {
+            text: "請將這段音訊的內容轉錄成文字。只需要輸出轉錄的文字內容，不需要其他說明。"
+          }
+        ]
+      }
+    });
+
+    const transcription = response.text || '';
+    console.log(`✅ Gemini 轉錄成功: ${transcription}`);
+    return transcription;
+  } catch (error) {
+    console.error('❌ Gemini 轉錄失敗:', error);
+    return null;
+  }
+}
+
+// 自動選擇可用的 ASR 服務並轉錄
+async function transcribeAudio(audioBuffer) {
+  // 優先使用 Groq (免費)
+  if (process.env.ASR_API_GROQ_KEY && groq) {
+    const result = await transcribeAudioWithGroq(audioBuffer);
+    if (result) return result;
+  }
+
+  // 備選：使用 Gemini
+  if (process.env.GEMINI_API_KEY || process.env.ASR_API_GEMINI_KEY) {
+    const result = await transcribeAudioWithGemini(audioBuffer);
+    if (result) return result;
+  }
+
+  console.error('❌ 沒有可用的 ASR 服務');
+  return null;
 }
 
 // 判斷用戶意圖（分析圖片 vs 編輯圖片）
@@ -388,11 +511,9 @@ async function uploadImageToGCS(buffer, mimeType, prompt) {
       return null;
     }
 
-    // 生成檔案名（參考 Python 版本的做法）
+    // 生成檔案名（使用 UUID 避免檔名過長）
     const fileExtension = getFileExtensionFromMimeType(mimeType);
-    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 30);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').substring(0, 15);
-    const uniqueFilename = `linebot_images/${timestamp}_${cleanPrompt}.${fileExtension}`;
+    const uniqueFilename = `linebot_images/${uuidv4()}.${fileExtension}`;
 
     console.log(`Generated unique filename: ${uniqueFilename}`);
 
@@ -447,11 +568,9 @@ async function saveImageLocally(buffer, mimeType, prompt) {
       fs.mkdirSync(imagesDir, { recursive: true });
     }
 
-    // 生成檔案名（使用時間戳和清理過的提示詞）
+    // 生成檔案名（使用 UUID 避免檔名過長）
     const fileExtension = getFileExtensionFromMimeType(mimeType);
-    const cleanPrompt = prompt.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').substring(0, 50);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `${timestamp}_${cleanPrompt}.${fileExtension}`;
+    const fileName = `${uuidv4()}.${fileExtension}`;
     const filePath = path.join(imagesDir, fileName);
 
     // 將 buffer 寫入檔案
@@ -653,14 +772,14 @@ async function handleEvent(event) {
     if (event.type === 'postback') {
       const userId = event.source.userId || event.source.groupId || event.source.roomId;
       const data = event.postback.data;
-      
+
       console.log(`📲 收到 postback: ${data}`);
-      
+
       // 處理地點類型選擇
       if (data.startsWith('place_type=')) {
         const placeType = data.replace('place_type=', '');
         const userState = userStates.get(userId);
-        
+
         // 檢查狀態是否存在和過期（30 分鐘）
         const LOCATION_EXPIRE_TIME = 30 * 60 * 1000; // 30 分鐘
         if (!userState || userState.state !== 'waiting_place_type') {
@@ -669,7 +788,7 @@ async function handleEvent(event) {
             text: '⚠️ 位置資訊已過期，請重新分享位置。'
           });
         }
-        
+
         // 檢查是否超過 30 分鐘
         if (Date.now() - userState.timestamp > LOCATION_EXPIRE_TIME) {
           userStates.delete(userId);
@@ -678,9 +797,9 @@ async function handleEvent(event) {
             text: '⚠️ 位置資訊已過期（超過30分鐘），請重新分享位置。'
           });
         }
-        
+
         const { latitude, longitude } = userState;
-        
+
         // 根據類型顯示不同的訊息
         const typeNames = {
           'gas_station': '⛽ 加油站',
@@ -690,12 +809,12 @@ async function handleEvent(event) {
           'restaurant': '🍴 餐廳',
           'atm': '🏧 ATM'
         };
-        
+
         console.log(`🔍 搜尋附近的${typeNames[placeType]}...`);
-        
+
         // 搜尋指定類型的地點
         const places = await searchNearbyPlaces(latitude, longitude, placeType);
-        
+
         if (places.length === 0) {
           // 不刪除狀態，讓用戶可以嘗試其他類型
           return client.replyMessage(event.replyToken, {
@@ -703,22 +822,22 @@ async function handleEvent(event) {
             text: `附近沒有找到${typeNames[placeType]} 😢\n\n💡 您可以再次分享位置並嘗試其他類型。`
           });
         }
-        
+
         const flexMessage = formatPlacesMessage(places);
-        
+
         // 保留位置資訊，讓用戶可以繼續查詢其他類型
         // 不刪除 userState，讓位置資訊可以重複使用直到過期
-        
+
         // 添加提示訊息
         const tipMessage = {
           type: 'text',
           text: '💡 您可以再次分享位置並選擇其他類型，或在30分鐘內位置資訊會保持有效。'
         };
-        
+
         return client.replyMessage(event.replyToken, [flexMessage, tipMessage]);
       }
     }
-    
+
     // 處理地理位置訊息
     if (event.type === 'message' && event.message.type === 'location') {
       const { latitude, longitude } = event.message;
@@ -875,6 +994,65 @@ async function handleEvent(event) {
       };
 
       return client.replyMessage(event.replyToken, [selectMessage]);
+    }
+
+    // 處理音訊訊息
+    if (event.type === 'message' && event.message.type === 'audio') {
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
+      const messageId = event.message.id;
+
+      console.log('🎤 收到音訊訊息:', { userId, messageId });
+
+      // 顯示 Loading
+      await showLoadingAnimation(userId, 20);
+
+      try {
+        // 下載音訊
+        const audioBuffer = await downloadAudioFromLine(messageId);
+        if (!audioBuffer) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '❌ 抱歉，無法下載音訊檔案。'
+          });
+        }
+
+        // 轉錄音訊
+        const transcription = await transcribeAudio(audioBuffer);
+        if (!transcription) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '❌ 抱歉，無法辨識音訊內容。請確認 ASR 服務已正確設定。'
+          });
+        }
+
+        console.log(`✅ 音訊轉錄成功: "${transcription}"`);
+
+        // 將轉錄文字送給 GPT 處理
+        const messages = [
+          { role: 'system', content: '你是一個有幫助的助手。' },
+          { role: 'user', content: transcription }
+        ];
+
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPEN_AI_MODEL || 'gpt-4o',
+          messages: messages,
+        });
+
+        const gptResponse = completion.choices[0].message.content;
+
+        // 回覆 GPT 的回應
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `🎤 您說：「${transcription}」\n\n${gptResponse}`
+        });
+
+      } catch (error) {
+        console.error('❌ 處理音訊訊息錯誤:', error);
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '❌ 抱歉，處理音訊時發生錯誤。'
+        });
+      }
     }
 
     // 處理文字訊息
@@ -1057,11 +1235,11 @@ async function handleEvent(event) {
       return new Promise((resolve, reject) => {
         const pythonPath = process.env.PYTHON_PATH || './venv/bin/python';
         const ragScriptPath = process.env.RAG_SCRIPT_PATH || 'rag_service.py';
-        
+
         console.log(`🔍 大同食譜查詢: "${query}"`);
         console.log(`📂 Python 路徑: ${pythonPath}`);
         console.log(`📂 RAG 腳本路徑: ${ragScriptPath}`);
-        
+
         const pythonProcess = spawn(pythonPath, [ragScriptPath, query], {
           encoding: 'utf-8',
           cwd: process.cwd() // 確保工作目錄正確
@@ -1085,35 +1263,35 @@ async function handleEvent(event) {
         pythonProcess.on('close', async (code) => {
           console.log(`🔚 Python process 結束，exit code: ${code}`);
           console.log(`📊 收到的資料長度: ${dataString.length} bytes`);
-          
+
           try {
             if (code !== 0) {
               console.error(`❌ Python 執行失敗，exit code: ${code}`);
               console.error(`❌ Error output: ${errorString}`);
-              await client.replyMessage(event.replyToken, { 
-                type: 'text', 
-                text: `查詢食譜時發生錯誤。\n\n錯誤詳情：\n${errorString.substring(0, 200)}` 
+              await client.replyMessage(event.replyToken, {
+                type: 'text',
+                text: `查詢食譜時發生錯誤。\n\n錯誤詳情：\n${errorString.substring(0, 200)}`
               });
               return resolve(null);
             }
 
             if (!dataString.trim()) {
               console.error('❌ Python 沒有返回任何資料');
-              await client.replyMessage(event.replyToken, { 
-                type: 'text', 
-                text: '查詢食譜時沒有收到回應，請稍後再試。' 
+              await client.replyMessage(event.replyToken, {
+                type: 'text',
+                text: '查詢食譜時沒有收到回應，請稍後再試。'
               });
               return resolve(null);
             }
 
             console.log(`📝 準備解析 JSON: ${dataString.substring(0, 200)}...`);
             const result = JSON.parse(dataString);
-            
+
             if (result.error) {
               console.error('RAG Error:', result.error);
-              await client.replyMessage(event.replyToken, { 
-                type: 'text', 
-                text: `查詢數據庫時發生錯誤：${result.error}` 
+              await client.replyMessage(event.replyToken, {
+                type: 'text',
+                text: `查詢數據庫時發生錯誤：${result.error}`
               });
               return resolve(null);
             }
@@ -1125,14 +1303,14 @@ async function handleEvent(event) {
             if (documents.length > 0) {
               console.log(`📋 第一筆資料預覽: ${documents[0].substring(0, 150)}...`);
               if (distances.length > 0 && searchMethod === 'vector_search') {
-                console.log(`📊 相似度分數 (越小越相似): ${distances.slice(0, 3).map((d, i) => `[${i+1}] ${d.toFixed(4)}`).join(', ')}`);
+                console.log(`📊 相似度分數 (越小越相似): ${distances.slice(0, 3).map((d, i) => `[${i + 1}] ${d.toFixed(4)}`).join(', ')}`);
               }
             }
-            
+
             if (documents.length === 0) {
-              await client.replyMessage(event.replyToken, { 
-                type: 'text', 
-                text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。' 
+              await client.replyMessage(event.replyToken, {
+                type: 'text',
+                text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。'
               });
               return resolve(null);
             }
@@ -1140,7 +1318,7 @@ async function handleEvent(event) {
             // Generate answer with GPT-4
             const context = documents.join('\n\n');
             console.log(`📄 Context 長度: ${context.length} 字元`);
-            
+
             const systemPrompt = `你是一個專業的大同電鍋食譜助手。
 
 重要規則：
@@ -1155,7 +1333,7 @@ ${context}`;
             const userPrompt = `請根據上述參考資料，回答以下問題：${query}`;
 
             console.log(`🤖 準備呼叫 GPT，query: "${query}"`);
-            
+
             const completion = await openai.chat.completions.create({
               model: process.env.OPEN_AI_MODEL || 'gpt-4o',
               messages: [
@@ -1169,7 +1347,7 @@ ${context}`;
             const replyText = completion.choices[0].message.content;
             console.log(`✅ GPT 回應長度: ${replyText.length} 字元`);
             console.log(`📝 GPT 回應預覽: ${replyText.substring(0, 100)}...`);
-            
+
             // 使用 Flex Message 回覆，包含退出按鈕
             const replyMessage = {
               type: 'flex',
@@ -1235,7 +1413,7 @@ ${context}`;
                 }
               }
             };
-            
+
             await client.replyMessage(event.replyToken, replyMessage);
             resolve(null);
 
@@ -1438,6 +1616,54 @@ ${context}`;
       }
     }
 
+    // 對話式圖片生成 - 進入模式
+    if (userInput === '畫圖' || userInput === '!畫圖' || userInput === '圖片生成') {
+      userStates.set(userId, { state: 'waiting_image_prompt' });
+      const promptMessage = {
+        type: 'flex', altText: '🎨 圖片生成',
+        contents: {
+          type: 'bubble',
+          header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 圖片生成', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
+          body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '請描述您想生成的圖片：', weight: 'bold', size: 'md', margin: 'md' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '範例：', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '• 一隻可愛的小貓在花園裡玩耍\n• 未來主義的城市景觀\n• 美麗的夕陽海景', size: 'sm', color: '#666666', wrap: true, margin: 'sm' }] },
+          footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+        }
+      };
+      return client.replyMessage(event.replyToken, [promptMessage]);
+    }
+
+    // 處理等待圖片提示詞的狀態
+    if (userState && userState.state === 'waiting_image_prompt') {
+      if (userInput === '取消' || userInput === '退出' || userInput === '停止') {
+        userStates.delete(userId);
+        return client.replyMessage(event.replyToken, { type: 'text', text: '已取消圖片生成。' });
+      }
+
+      const imagePrompt = userInput.trim();
+      if (!imagePrompt || imagePrompt.length < 2) {
+        return client.replyMessage(event.replyToken, { type: 'text', text: '請提供有效的圖片描述。' });
+      }
+
+      // 更新狀態為生成中（保留狀態）
+      userStates.set(userId, { state: 'generating_image', prompt: imagePrompt });
+
+      await showLoadingAnimation(userId, 60);
+      await client.replyMessage(event.replyToken, { type: 'text', text: `✨ 即將為您生成圖片：\n「${imagePrompt}」\n\n⏳ 請稍等片刻...` });
+
+      setTimeout(async () => {
+        try {
+          await generateImageWithGeminiPush(imagePrompt, event.source, userId);
+        } catch (error) {
+          console.error('圖片生成錯誤:', error);
+          await client.pushMessage(userId, { type: 'text', text: '抱歉，圖片生成過程中發生錯誤。' });
+        } finally {
+          // 生成完成後清除狀態
+          userStates.delete(userId);
+        }
+      }, 1000);
+
+      return Promise.resolve(null);
+    }
+
     // 檢查是否為圖片生成指令
     if (isImageGenerationCommand(userInput)) {
       const imagePrompt = extractImagePrompt(userInput);
@@ -1504,44 +1730,45 @@ ${context}`;
         },
       }
 
-      // 第二個按鈕組 - 天氣特報和圖片生成
+      // 第二個按鈕組 - 天氣、圖片與工具
       const buttons2 = {
         type: 'template',
         altText: '更多服務',
         template: {
           type: 'buttons',
           title: '更多服務',
-          text: '天氣、圖片生成與生活幫手',
+          text: '天氣、圖片生成與實用工具',
           actions: [
             { label: '📍 找附近設施', type: 'message', text: '找附近設施' },
-            { label: '天氣特報', type: 'message', text: '天氣特報' },
-            { label: 'AI 畫圖', type: 'message', text: '!畫圖 一隻可愛的小貓' },
-            { label: '法律諮詢', type: 'message', text: '法律諮詢' }
+            { label: '🌤️ 天氣特報', type: 'message', text: '天氣特報' },
+            { label: '🎨 AI 畫圖', type: 'message', text: '畫圖' },
+            { label: '🛠️ 線上工具', type: 'message', text: '工具' }
           ],
         },
       }
 
-      // 第三個按鈕組 - 大同電鍋食譜
+      // 第三個按鈕組 - 大同電鍋食譜與法律諮詢
       const buttons3 = {
         type: 'template',
-        altText: '食譜服務',
+        altText: '食譜與諮詢',
         template: {
           type: 'buttons',
-          title: '食譜服務',
-          text: '美味料理輕鬆做',
+          title: '食譜與諮詢',
+          text: '大同電鍋食譜與法律諮詢',
           actions: [
-            { label: '大同電鍋食譜', type: 'message', text: '大同食譜' }
+            { label: '🍲 大同食譜', type: 'message', text: '大同食譜' },
+            { label: '⚖️ 法律諮詢', type: 'message', text: '法律諮詢' }
           ],
         },
       }
-
-      // const hintMessage = {
-      //   type: 'text',
-      //   text: '💡 貼心小提示：\n\n📍 點選「找附近設施」或直接傳送位置資訊，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
-      // }
 
       return client.replyMessage(event.replyToken, [buttons, buttons2, buttons3])
     }
+
+    // const hintMessage = {
+    //   type: 'text',
+    //   text: '💡 貼心小提示：\n\n📍 點選「找附近設施」或直接傳送位置資訊，我可以幫您搜尋附近的加油站、超商、餐廳等設施喔！'
+    // }
 
     // 找附近設施功能
     if (userInput === '找附近設施' || userInput === '附近設施' || userInput === '找設施') {
@@ -1579,14 +1806,136 @@ ${context}`;
       return client.replyMessage(event.replyToken, [echo])
     }
 
+    // 處理工具網站請求
+    if (userInput === '工具' || userInput === 'tools' || userInput === '線上工具' || userInput.includes('tool.david888')) {
+      const toolMessage = {
+        type: 'flex',
+        altText: '🛠️ 線上工具集',
+        contents: {
+          type: 'bubble',
+          hero: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '🛠️ 線上工具集',
+                weight: 'bold',
+                size: 'xxl',
+                color: '#1DB446',
+                align: 'center'
+              }
+            ],
+            paddingAll: 'xl',
+            backgroundColor: '#F0F8FF'
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '精選實用工具',
+                weight: 'bold',
+                size: 'lg',
+                margin: 'md'
+              },
+              {
+                type: 'separator',
+                margin: 'md'
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                margin: 'lg',
+                spacing: 'sm',
+                contents: [
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      { type: 'text', text: '🕐', size: 'sm', flex: 0 },
+                      { type: 'text', text: '線上時鐘', size: 'sm', color: '#555555', flex: 0 }
+                    ]
+                  },
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      { type: 'text', text: '🔑', size: 'sm', flex: 0 },
+                      { type: 'text', text: 'UUID 產生器', size: 'sm', color: '#555555', flex: 0 }
+                    ]
+                  },
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      { type: 'text', text: '🔐', size: 'sm', flex: 0 },
+                      { type: 'text', text: 'Hash 加密工具', size: 'sm', color: '#555555', flex: 0 }
+                    ]
+                  },
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      { type: 'text', text: '📝', size: 'sm', flex: 0 },
+                      { type: 'text', text: 'Base64 轉換', size: 'sm', color: '#555555', flex: 0 }
+                    ]
+                  },
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      { type: 'text', text: '🎨', size: 'sm', flex: 0 },
+                      { type: 'text', text: '顏色選擇器', size: 'sm', color: '#555555', flex: 0 }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                action: {
+                  type: 'uri',
+                  label: '開啟工具網站',
+                  uri: 'https://tool.david888.com'
+                },
+                style: 'primary',
+                color: '#1DB446'
+              }
+            ]
+          }
+        }
+      };
+      return client.replyMessage(event.replyToken, [toolMessage]);
+    }
 
     if (userInput === '解答之書') {
       // 呼叫 解答之書 API
-      const response = await axios.get('https://answerbook.david888.com/')
+      const response = await axios.get('https://answerbook.david888.com/answersOriginal')
       if (response.status === 200 && response.data && response.data.answer) {
         const answer = response.data.answer || '無法取得解答'
-        const echo = { type: 'text', text: `解答之書說：${answer}` }
-        return client.replyMessage(event.replyToken, [echo])
+        const flexMessage = {
+          type: 'flex', altText: '🔮 解答之書',
+          contents: {
+            type: 'bubble',
+            header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🔮 解答之書', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#9B59B6', paddingAll: 'lg' },
+            body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '神秘的解答', weight: 'bold', size: 'md', color: '#9B59B6', margin: 'md' }, { type: 'separator', margin: 'md' }, { type: 'text', text: answer, wrap: true, size: 'lg', margin: 'lg', color: '#333333' }] },
+            footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✨ 願這個解答為你指引方向', size: 'xs', color: '#999999', align: 'center' }] }
+          }
+        };
+        return client.replyMessage(event.replyToken, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得解答。' }
         return client.replyMessage(event.replyToken, [echo])
@@ -1598,9 +1947,16 @@ ${context}`;
       const response = await axios.get('http://answerbook.david888.com/TangPoetry')
       if (response.status === 200 && response.data && response.data.poem) {
         const { author, title, text } = response.data.poem
-        const poemText = `${title} - ${author}\n${text}`
-        const echo = { type: 'text', text: poemText }
-        return client.replyMessage(event.replyToken, [echo])
+        const flexMessage = {
+          type: 'flex', altText: '📜 唐詩',
+          contents: {
+            type: 'bubble',
+            header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '📜 唐詩', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#F39C12', paddingAll: 'lg' },
+            body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: title, weight: 'bold', size: 'lg', color: '#F39C12' }, { type: 'text', text: `作者：${author}`, size: 'sm', color: '#999999', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: text, wrap: true, size: 'md', margin: 'lg', color: '#333333' }] },
+            footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✨ 品味古典詩詞之美', size: 'xs', color: '#999999', align: 'center' }] }
+          }
+        };
+        return client.replyMessage(event.replyToken, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得唐詩。' }
         return client.replyMessage(event.replyToken, [echo])
@@ -1612,9 +1968,16 @@ ${context}`;
       const response = await axios.get('http://answerbook.david888.com/TempleOracleJP')
       if (response.status === 200 && response.data && response.data.oracle) {
         const { type, poem, explain, result } = response.data.oracle
-        const oracleText = `籤詩類型：${type}\n籤詩：${poem}\n解釋：${explain}\n結果：${JSON.stringify(result, null, 2)}`
-        const echo = { type: 'text', text: oracleText }
-        return client.replyMessage(event.replyToken, [echo])
+        const flexMessage = {
+          type: 'flex', altText: '🏮 淺草籤',
+          contents: {
+            type: 'bubble',
+            header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🏮 淺草籤', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#E74C3C', paddingAll: 'lg' },
+            body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: `${type}`, weight: 'bold', size: 'lg', color: '#E74C3C' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '籤詩', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: poem, wrap: true, size: 'md', color: '#333333' }, { type: 'text', text: '解釋', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: explain, wrap: true, size: 'md', color: '#333333' }] },
+            footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🏯 願神明保佑', size: 'xs', color: '#999999', align: 'center' }] }
+          }
+        };
+        return client.replyMessage(event.replyToken, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得淺草籤。' }
         return client.replyMessage(event.replyToken, [echo])
@@ -1814,8 +2177,79 @@ ${context}`;
       // 設定用戶狀態為等待奇門遁甲問題
       userStates.set(userId, { state: 'waiting_qimen_question' })
 
-      const echo = { type: 'text', text: '請問您想要占卜什麼問題？\n例如：今天適合投資嗎？、這個工作機會好嗎？、感情狀況如何？\n\n如要取消，請輸入「取消」或「退出」' }
-      return client.replyMessage(event.replyToken, [echo])
+      const qimenPrompt = {
+        type: 'flex',
+        altText: '☯️ 奇門遁甲',
+        contents: {
+          type: 'bubble',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '☯️ 奇門遁甲',
+                weight: 'bold',
+                size: 'xl',
+                color: '#FFFFFF'
+              }
+            ],
+            backgroundColor: '#34495E',
+            paddingAll: 'lg'
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'text',
+                text: '請問您想要占卜什麼問題？',
+                weight: 'bold',
+                size: 'md',
+                margin: 'md'
+              },
+              {
+                type: 'separator',
+                margin: 'md'
+              },
+              {
+                type: 'text',
+                text: '範例：',
+                size: 'sm',
+                color: '#999999',
+                margin: 'md'
+              },
+              {
+                type: 'text',
+                text: '• 今天適合投資嗎？\n• 這個工作機會好嗎？\n• 感情狀況如何？',
+                size: 'sm',
+                color: '#666666',
+                wrap: true,
+                margin: 'sm'
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                action: {
+                  type: 'message',
+                  label: '✖️ 退出',
+                  text: '取消'
+                },
+                style: 'secondary',
+                color: '#AAAAAA',
+                height: 'sm'
+              }
+            ]
+          }
+        }
+      };
+      return client.replyMessage(event.replyToken, [qimenPrompt])
     }
 
     // 檢查用戶是否正在進行奇門遁甲占卜
@@ -1847,9 +2281,17 @@ ${context}`;
 
         if (qimenResponse.status === 200 && qimenResponse.data && qimenResponse.data.success) {
           const answer = qimenResponse.data.answer || '無法取得占卜結果'
-          const qimenText = `奇門遁甲占卜如下：\n\n問題：${qimenResponse.data.question}\n\n${answer}`
-          const echo = { type: 'text', text: qimenText }
-          return client.replyMessage(event.replyToken, [echo])
+          const question = qimenResponse.data.question || userInput
+          const flexMessage = {
+            type: 'flex', altText: '☯️ 奇門遁甲',
+            contents: {
+              type: 'bubble',
+              header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '☯️ 奇門遁甲', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#34495E', paddingAll: 'lg' },
+              body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '占卜問題', weight: 'bold', size: 'md', color: '#34495E', margin: 'md' }, { type: 'text', text: question, wrap: true, size: 'sm', color: '#666666', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '占卜結果', weight: 'bold', size: 'md', color: '#34495E', margin: 'md' }, { type: 'text', text: answer, wrap: true, size: 'md', margin: 'sm', color: '#333333' }] },
+              footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '☯️ 天機玄妙，僅供參考', size: 'xs', color: '#999999', align: 'center' }] }
+            }
+          };
+          return client.replyMessage(event.replyToken, [flexMessage])
         } else {
           const echo = { type: 'text', text: '抱歉，目前無法取得奇門遁甲占卜結果。' }
           return client.replyMessage(event.replyToken, [echo])

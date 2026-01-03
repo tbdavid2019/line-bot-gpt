@@ -54,11 +54,13 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 整合 Google Gemini 2.5 Flash AI 視覺功能
   - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
   - ✏️ **圖片編輯**：基於現有圖片進行 AI 編輯
-  - 🎨 **文字生成圖片**：從文字描述生成全新圖片
-- 解答之書占卜服務
-- 唐詩隨機推薦
-- 淺草籤占卜
-- 奇門遁甲占卜
+  - 🎨 **文字生成圖片**：從文字描述生成全新圖片（對話式互動）
+- 🎤 **語音辨識 (ASR)**：支援 Groq Whisper 和 Gemini ASR，自動轉錄語音並用 GPT 回應
+- 🛠️ **線上工具集**：整合 tool.david888.com 實用工具網站
+- 解答之書占卜服務（精美 Flex Message 呈現）
+- 唐詩隨機推薦（精美 Flex Message 呈現）
+- 淺草籤占卜（精美 Flex Message 呈現）
+- 奇門遁甲占卜（精美 Flex Message 呈現）
 - 台灣氣象署天氣特報
 - 台灣法律諮詢（整合台灣法律 LLM）
 - 📍 **周邊設施查詢**：傳送位置資訊，查找附近加油站、超商、餐廳、咖啡廳、停車場、ATM 等設施
@@ -67,6 +69,44 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 
 - 通過環境變數配置 API 金鑰
 - 支援 Docker 容器化
+
+### 🎤 語音辨識功能 (NEW!)
+
+讓 AI 幫你「聽懂語音」，自動轉錄並智能回應。
+
+**使用方式：**
+1. 在 LINE 中發送語音訊息給 Bot
+2. Bot 自動轉錄語音內容
+3. 將轉錄文字送給 GPT 處理
+4. 回覆智能回應
+
+**支援的 ASR 服務：**
+- **Groq Whisper** (推薦，免費額度)
+- **Gemini ASR** (使用 Gemini API)
+- **OpenAI Whisper** (可選)
+
+**範例：**
+```
+User: 🎤 [語音: "講個笑話"]
+Bot: 🎤 您說：「講個笑話」
+     
+     從前從前有一隻程式設計師...
+```
+
+### 🛠️ 線上工具集 (NEW!)
+
+快速存取實用的開發者工具。
+
+**使用方式：**
+- 輸入「工具」、「tools」或「線上工具」
+
+**包含工具：**
+- 🕐 線上時鐘
+- 🔑 UUID 產生器
+- 🔐 Hash 加密工具
+- 📝 Base64 轉換
+- 🎨 顏色選擇器
+- 更多工具請訪問 https://tool.david888.com
 
 ### 🔍 圖片分析功能
 
@@ -102,19 +142,30 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 **自動觸發關鍵字：**
 編輯、修改、改成、變成、把...改、加上、背景、風格、edit、change 等
 
-### 🎨 文字生成圖片功能
+### 🎨 文字生成圖片功能 (UPDATED!)
 
-從零開始，用文字描述生成全新圖片。
+從零開始，用文字描述生成全新圖片。**現已支援對話式互動！**
 
 **使用方式：**
-- **指令驅動**：`!畫圖 一隻可愛的小貓咪`、`!image a sunset`
-- **自然語言驅動**：在對話中包含「畫圖」、「幫我產生圖」等關鍵字
-- **取消機制**：生成過程中輸入「取消」可中止
+- **對話式生成** (推薦)：
+  1. 輸入「畫圖」、「!畫圖」或「圖片生成」
+  2. Bot 會引導你輸入圖片描述
+  3. 輸入詳細的圖片描述
+  4. Bot 自動生成圖片
+  5. 可隨時輸入「取消」退出
 
 **生成範例：**
-- `!畫圖 一隻可愛的小貓咪在花園裡玩耍`
-- `幫我畫一張美麗的夕陽風景圖`
-- `!image a futuristic city with flying cars`
+```
+User: 畫圖
+Bot: 🎨 請描述您想生成的圖片：
+     範例：
+     • 一隻可愛的小貓在花園裡玩耍
+     • 未來主義的城市景觀
+     
+User: 一隻貓在看星空
+Bot: ✨ 即將為您生成圖片...
+     [圖片生成]
+```
 
 ### 📍 周邊設施查詢
 
@@ -300,6 +351,11 @@ GOOGLE_CLOUD_BUCKET_NAME=your_bucket_name
 # Google Maps API（用於周邊設施查詢）
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 
+# ASR (語音辨識) API Keys
+ASR_API_GROQ_KEY=your_groq_whisper_api_key  # Groq Whisper (推薦，免費額度)
+ASR_API_GEMINI_KEY=  # Optional: 留空則使用 GEMINI_API_KEY
+ASR_API_OPENAI_KEY=  # Optional: 留空則使用 OPEN_AI_LINE_SECRET
+
 # Python RAG 服務設定（大同食譜功能）
 PYTHON_PATH=./venv/bin/python
 RAG_SCRIPT_PATH=rag_service.py
@@ -310,8 +366,10 @@ RAG_SCRIPT_PATH=rag_service.py
 
 **重要說明：**
 - `OPEN_AI_LINE_SECRET` 同時用於：GPT 對話、圖片生成、大同食譜 RAG embedding
-- `GEMINI_API_KEY` 用於：圖片分析（視覺功能）
+- `GEMINI_API_KEY` 用於：圖片分析（視覺功能）、圖片生成
 - `GOOGLE_MAPS_API_KEY` 用於：周邊設施查詢功能
+- `ASR_API_GROQ_KEY` 用於：語音辨識（Groq Whisper，免費）
+- Bot 會自動選擇可用的 ASR 服務（Groq → Gemini → OpenAI）
 GOOGLE_CLOUD_KEY_FILE=path/to/service-account-key.json
 
 # 伺服器設定
@@ -413,8 +471,26 @@ PORT=8111
 # 建置映像
 docker build -t line-bot-gpt .
 
-# 啟動容器
+# 啟動正式版
 docker run -dp 8111:8111 --env-file .env --name line-bot-gpt --restart unless-stopped line-bot-gpt
+
+# 1. 停止並刪除舊容器（如果正在運行）
+docker stop line-bot-gpt
+docker rm line-bot-gpt
+
+# 2. 重新建置映像（包含新功能）
+docker build -t line-bot-gpt:dev .
+
+# 3. 啟動 dev 版本容器
+docker run -dp 8111:8111 --env-file .env --name line-bot-gpt-dev --restart unless-stopped line-bot-gpt:dev
+
+# 停止 dev 版本
+docker stop line-bot-gpt-dev
+docker rm line-bot-gpt-dev
+
+# 停止正式版
+docker stop line-bot-gpt
+docker rm line-bot-gpt
 ```
 
 ### 📝 重要提醒
