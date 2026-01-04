@@ -453,30 +453,47 @@ async function generateImageWithGeminiPush(prompt, source, userId) {
         const imageUrl = await uploadImageToGCS(buffer, inlineData.mimeType, prompt);
 
         if (imageUrl) {
-          const imageMessage = {
-            type: 'image',
-            originalContentUrl: imageUrl,
-            previewImageUrl: imageUrl
+          const successFlexMessage = {
+            type: 'flex',
+            altText: '✅ 圖片生成成功',
+            contents: {
+              type: 'bubble',
+              hero: {
+                type: 'image',
+                url: imageUrl,
+                size: 'full',
+                aspectRatio: '1:1',
+                aspectMode: 'cover',
+                action: {
+                  type: 'uri',
+                  uri: imageUrl
+                }
+              },
+              header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
+              body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }] },
+              footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+            }
           };
 
-          const successTextMessage = {
-            type: 'text',
-            text: `✅ 圖片已成功生成！\n\n🎨 主題：${prompt}\n🔗 圖片連結：${imageUrl}`
-          };
-
-          await client.pushMessage(userId, [imageMessage, successTextMessage]);
+          await client.pushMessage(userId, successFlexMessage);
           imageGenerated = true;
         } else {
           // 如果無法上傳到雲端，則保存到本地
           const savedPath = await saveImageLocally(buffer, inlineData.mimeType, prompt);
 
           if (savedPath) {
-            const successMessage = {
-              type: 'text',
-              text: `✅ 圖片已成功生成！\n\n🎨 主題：${prompt}\n📁 已保存至伺服器本地\n\n⚠️ 注意：由於雲端存儲配置問題，圖片已保存在伺服器的 images 資料夾中。`
+            const successFlexMessage = {
+              type: 'flex',
+              altText: '✅ 圖片生成成功',
+              contents: {
+                type: 'bubble',
+                header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
+                body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '📋 儲存位置', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '已保存至伺服器本地', size: 'sm', color: '#666666', margin: 'sm' }, { type: 'text', text: '⚠️ 由於雲端儲存配置問題，圖片已保存在 images 資料夾', size: 'xs', color: '#999999', wrap: true, margin: 'sm' }] },
+                footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+              }
             };
 
-            await client.pushMessage(userId, [successMessage]);
+            await client.pushMessage(userId, [successFlexMessage]);
             imageGenerated = true;
           }
         }
@@ -2288,7 +2305,7 @@ ${context}`;
               type: 'bubble',
               header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '☯️ 奇門遁甲', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#34495E', paddingAll: 'lg' },
               body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '占卜問題', weight: 'bold', size: 'md', color: '#34495E', margin: 'md' }, { type: 'text', text: question, wrap: true, size: 'sm', color: '#666666', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '占卜結果', weight: 'bold', size: 'md', color: '#34495E', margin: 'md' }, { type: 'text', text: answer, wrap: true, size: 'md', margin: 'sm', color: '#333333' }] },
-              footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '☯️ 天機玄妙，僅供參考', size: 'xs', color: '#999999', align: 'center' }] }
+              footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }, { type: 'text', text: '☯️ 天機玄妙，僅供參考', size: 'xs', color: '#999999', align: 'center', margin: 'sm' }] }
             }
           };
           return client.replyMessage(event.replyToken, [flexMessage])
