@@ -2,11 +2,12 @@ version: '3.8'
 
 services:
   line-bot:
+    image: tbdavid2019/line-bot-gpt:latest
     build:
       context: .
       dockerfile: Dockerfile
     container_name: line-bot-gpt
-    restart: unless-stopped
+    restart: always
     ports:
       - "8111:8111"
     environment:
@@ -18,6 +19,8 @@ services:
       - ./service-account-key.json:/usr/src/app/service-account-key.json:ro
       # 持久化圖片存儲（本地備用方案）
       - ./images:/usr/src/app/images
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:8111/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
