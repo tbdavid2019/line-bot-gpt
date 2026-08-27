@@ -1,0 +1,304 @@
+/**
+ * David888 Wiki Publisher Helper
+ * 
+ * 支援透過 REST API 發布、閱讀、追加 Markdown 內容至 wiki.david888.com
+ * 提供網頁轉 Markdown、統計解析、簡報模式 (Slides) 與電子書模式 (Book) 連結
+ */
+
+const BASE_URL = process.env.WIKI_BASE_URL 
+  ? process.env.WIKI_BASE_URL.replace(/\/+$/, '') 
+  : 'https://wiki.david888.com';
+
+const API_BASE_URL = `${BASE_URL}/api`;
+
+/**
+ * 輔助函數：將字串轉為安全的 path slug
+ */
+function sanitizePath(titleOrPath) {
+  if (!titleOrPath) {
+    return `note-${Date.now()}`;
+  }
+  // 移除特殊字元並轉換空格為連字號
+  let slug = titleOrPath
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fa5\-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  if (!slug) slug = `note-${Date.now()}`;
+  return slug;
+}
+
+/**
+ * 發布或更新 Wiki 筆記
+ * @param {string} notePath - 筆記路徑 (如 tech-notes, report-2026)
+ * @param {string} markdownText - Markdown 內容
+ * @param {Object} options - { theme, isPublic, append, password, width }
+ */
+async function publishNote(notePath, markdownText, options = {}) {
+  const {
+    theme = 'claude-canvas',
+    isPublic = true,
+    append = false,
+    password = '',
+    width = '100%'
+  } = options;
+
+  const cleanPath = sanitizePath(notePath);
+  const targetUrl = `${API_BASE_URL}/${cleanPath}${append ? '?append=true' : ''}`;
+
+  const payload = {
+    text: markdownText,
+    public: isPublic,
+    theme: theme,
+    width: width
+  };
+
+  if (append) payload.append = true;
+  if (password) payload.pw = password;
+
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8'
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30000)
+  });
+
+  if (!res.ok) {
+    throw new Error(`Wiki API error HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const json = await res.json();
+  if (json.err !== 0 && json.error) {
+    throw new Error(json.msg || json.message || 'Failed to publish wiki note');
+  }
+
+  const data = json.data || {};
+  // 關鍵規則：必須返回 public read-only shareUrl 給用戶
+  const shareUrl = data.shareUrl || `${BASE_URL}/share/${cleanPath}`;
+  const editUrl = data.url || `${BASE_URL}/${cleanPath}`;
+
+  return {
+    success: true,
+    path: cleanPath,
+    shareUrl: shareUrl,
+    url: editUrl,
+    presentUrl: `${shareUrl}/present`,
+    bookUrl: `${shareUrl}/book`,
+    theme: theme,
+    message: data.msg || 'Saved successfully'
+  };
+}
+
+/**
+ * 讀取 Wiki 筆記 Markdown 原文
+ * @param {string} notePath - 筆記路徑
+ * @param {string} password - 存取密碼 (若有保護)
+ */
+async function readNote(notePath, password = '') {
+  const cleanPath = sanitizePath(notePath);
+  let targetUrl = `${API_BASE_URL}/${cleanPath}`;
+  if (password) targetUrl += `?pw=${encodeURIComponent(password)}`;
+
+  const res = await fetch(targetUrl, {
+    method: 'GET',
+    headers: {
+      'Accept': 'text/markdown, application/json'
+    },
+    signal: AbortSignal.timeout(20000)
+  });
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('此 Wiki 筆記已受密碼保護，請提供正確密碼。');
+    }
+    if (res.status === 404) {
+      throw new Error(`找不到 Wiki 筆記「${notePath}」。`);
+    }
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const text = await res.text();
+  return {
+    success: true,
+    path: cleanPath,
+    markdown: text,
+    shareUrl: `${BASE_URL}/${cleanPath}`
+  };
+}
+
+/**
+ * 將外部網頁 URL 轉換為 Markdown (使用 2md.aiurl.tw / wiki parse API)
+ * @param {string} url - 外部文章網址
+ */
+async function parseUrlToMarkdown(url) {
+  const targetUrl = `${API_BASE_URL}/markdown/parse`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url }),
+    signal: AbortSignal.timeout(30000)
+  });
+
+  if (!res.ok) throw new Error(`Parse failed HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.err === 0 && json.data) {
+    return {
+      success: true,
+      title: json.data.title || 'Extracted Article',
+      markdown: json.data.content || '',
+      sourceUrl: json.data.sourceUrl || url
+    };
+  }
+  throw new Error(json.msg || 'Failed to parse URL to markdown');
+}
+
+/**
+ * 格式化 Wiki 發布成功的 LINE Flex Message
+ * @param {Object} wikiResult - { path, shareUrl, presentUrl, bookUrl, theme }
+ * @param {string} title - 文章標題
+ * @param {string} summary - 簡短摘要
+ */
+function formatWikiFlexMessage(wikiResult, title = '', summary = '') {
+  const displayTitle = title || wikiResult.path || 'David888 Wiki 筆記';
+
+  const bodyContents = [
+    {
+      type: 'text',
+      text: displayTitle,
+      weight: 'bold',
+      size: 'md',
+      wrap: true,
+      color: '#333333'
+    },
+    {
+      type: 'separator',
+      margin: 'md'
+    }
+  ];
+
+  if (summary) {
+    bodyContents.push({
+      type: 'text',
+      text: summary.length > 120 ? summary.slice(0, 117) + '...' : summary,
+      size: 'xs',
+      color: '#666666',
+      wrap: true,
+      margin: 'md'
+    });
+  }
+
+  bodyContents.push({
+    type: 'box',
+    layout: 'vertical',
+    spacing: 'xs',
+    margin: 'md',
+    contents: [
+      {
+        type: 'box',
+        layout: 'horizontal',
+        contents: [
+          { type: 'text', text: '路徑', size: 'xs', color: '#999999', flex: 2 },
+          { type: 'text', text: wikiResult.path, size: 'xs', color: '#333333', flex: 5, weight: 'bold' }
+        ]
+      },
+      {
+        type: 'box',
+        layout: 'horizontal',
+        contents: [
+          { type: 'text', text: '主題風格', size: 'xs', color: '#999999', flex: 2 },
+          { type: 'text', text: wikiResult.theme || 'claude-canvas', size: 'xs', color: '#333333', flex: 5 }
+        ]
+      }
+    ]
+  });
+
+  return {
+    type: 'flex',
+    altText: `📖 Wiki 文章已發布：${displayTitle}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#1E293B',
+        paddingAll: 'lg',
+        contents: [
+          {
+            type: 'text',
+            text: '📖 David888 Wiki 發布成功',
+            weight: 'bold',
+            size: 'lg',
+            color: '#38BDF8'
+          }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: bodyContents
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#38BDF8',
+            height: 'sm',
+            action: {
+              type: 'uri',
+              label: '🌐 閱讀 Wiki 文章',
+              uri: wikiResult.shareUrl
+            }
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                style: 'secondary',
+                height: 'sm',
+                flex: 1,
+                action: {
+                  type: 'uri',
+                  label: '📑 2D 簡報',
+                  uri: wikiResult.presentUrl
+                }
+              },
+              {
+                type: 'button',
+                style: 'secondary',
+                height: 'sm',
+                flex: 1,
+                action: {
+                  type: 'uri',
+                  label: '📚 電子書',
+                  uri: wikiResult.bookUrl
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  };
+}
+
+module.exports = {
+  BASE_URL,
+  API_BASE_URL,
+  sanitizePath,
+  publishNote,
+  readNote,
+  parseUrlToMarkdown,
+  formatWikiFlexMessage
+};

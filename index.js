@@ -14,6 +14,7 @@ const { searchNearbyPlaces, formatPlacesMessage } = require('./maps_helper')
 const { v4: uuidv4 } = require('uuid')
 const Groq = require('groq-sdk')
 const boxHelper = require('./box_helper')
+const wikiHelper = require('./wiki_helper')
 
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
@@ -1246,7 +1247,7 @@ async function handleEvent(event) {
       // 如果沒有設定 LINE_BOT_USER_ID，則檢查訊息是否以機器人名稱開頭
       if (!botUserId || !botUserId.startsWith('U')) {
         // 備用方案：檢查訊息是否包含常見的機器人呼叫方式或 @ 符號
-        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲', '天氣特報', '!box', '888box', 'box', '轉存', '下載', '雲端空間', '播客']
+        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲', '天氣特報', '!box', '888box', 'box', '轉存', '下載', '雲端空間', '播客', '!wiki', 'wiki', '知識庫', '筆記']
         const hasValidTrigger = botTriggers.some(trigger =>
           event.message.text.toLowerCase().includes(trigger.toLowerCase())
         )
@@ -2021,6 +2022,162 @@ ${context}`;
       }
     }
 
+    // David888 Wiki 筆記發布 / 閱讀 / 網頁轉文章指令
+    const isWikiCommand = userInput.startsWith('!wiki') || 
+                          userInput === 'wiki' || 
+                          userInput === '知識庫' || 
+                          userInput === 'david888 wiki';
+
+    if (isWikiCommand) {
+      // 1. Wiki 說明與選單
+      if (userInput === '!wiki' || userInput === '!wiki help' || userInput === 'wiki' || userInput === '知識庫') {
+        const wikiHelpFlex = {
+          type: 'flex',
+          altText: '📖 David888 Wiki 知識庫功能',
+          contents: {
+            type: 'bubble',
+            header: {
+              type: 'box',
+              layout: 'vertical',
+              backgroundColor: '#1E293B',
+              paddingAll: 'lg',
+              contents: [
+                { type: 'text', text: '📖 David888 Wiki 知識庫', weight: 'bold', size: 'lg', color: '#38BDF8' }
+              ]
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              spacing: 'md',
+              contents: [
+                { type: 'text', text: '支援直接將文字/筆記發布為 Markdown 文章，並提供 2D 簡報模式與電子書模式：', size: 'sm', wrap: true, color: '#333333' },
+                { type: 'separator' },
+                {
+                  type: 'box',
+                  layout: 'vertical',
+                  spacing: 'xs',
+                  contents: [
+                    { type: 'text', text: '📝 發布文章：', size: 'xs', weight: 'bold', color: '#38BDF8' },
+                    { type: 'text', text: '!wiki <路徑> <Markdown內容>', size: 'xs', color: '#666666' },
+                    { type: 'text', text: '例：!wiki my-note # 標題\\n內文...', size: 'xs', color: '#888888' },
+                    { type: 'text', text: '📥 轉存網頁成 Wiki 文章：', size: 'xs', weight: 'bold', color: '#38BDF8', margin: 'sm' },
+                    { type: 'text', text: '!wiki parse <網址>', size: 'xs', color: '#666666' },
+                    { type: 'text', text: '📖 讀取文章：', size: 'xs', weight: 'bold', color: '#38BDF8', margin: 'sm' },
+                    { type: 'text', text: '!wiki read <路徑>', size: 'xs', color: '#666666' }
+                  ]
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              spacing: 'sm',
+              contents: [
+                {
+                  type: 'button',
+                  style: 'primary',
+                  color: '#38BDF8',
+                  height: 'sm',
+                  action: { type: 'uri', label: '🌐 開啟 David888 Wiki', uri: 'https://wiki.david888.com' }
+                }
+              ]
+            }
+          }
+        };
+        return client.replyMessage(event.replyToken, [wikiHelpFlex]);
+      }
+
+      // 2. 轉存外部網頁成 Wiki 文章
+      const parseMatch = userInput.match(/^!wiki\s+(?:parse|轉文章|轉存)\s+(https?:\/\/[^\s]+)$/i);
+      if (parseMatch) {
+        const sourceUrl = parseMatch[1];
+        await showLoadingAnimation(userId, 45);
+        await client.replyMessage(event.replyToken, { type: 'text', text: `📥 正在將網頁解析為 Markdown 並發布至 Wiki...\n🔗 網址：${sourceUrl}\n⏳ 請稍候...` });
+
+        setTimeout(async () => {
+          try {
+            const parsed = await wikiHelper.parseUrlToMarkdown(sourceUrl);
+            const pathSlug = `article-${Date.now()}`;
+            const publishRes = await wikiHelper.publishNote(pathSlug, `# ${parsed.title}\n\n> 來源：[${sourceUrl}](${sourceUrl})\n\n${parsed.markdown}`);
+            const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, parsed.title, parsed.markdown.slice(0, 150));
+            await client.pushMessage(userId, [flexMsg]);
+          } catch (err) {
+            console.error('Wiki 網頁轉文章錯誤:', err);
+            await client.pushMessage(userId, { type: 'text', text: `❌ 網頁轉存至 Wiki 失敗：${err.message}` });
+          }
+        }, 500);
+
+        return Promise.resolve(null);
+      }
+
+      // 3. 讀取 Wiki 筆記
+      const readMatch = userInput.match(/^!wiki\s+(?:read|get|讀取)\s+([^\s]+)(?:\s+(.+))?$/i);
+      if (readMatch) {
+        const targetPath = readMatch[1];
+        const password = readMatch[2] || '';
+        try {
+          await showLoadingAnimation(userId, 15);
+          const readRes = await wikiHelper.readNote(targetPath, password);
+          const snippet = readRes.markdown.length > 800 ? readRes.markdown.slice(0, 790) + '\n\n...(內容過長，請點擊連結查看完整筆記)' : readRes.markdown;
+          const textMessage = {
+            type: 'text',
+            text: `📖 Wiki 筆記「${targetPath}」：\n\n${snippet}\n\n🌐 線上閱讀：https://wiki.david888.com/${targetPath}`
+          };
+          return client.replyMessage(event.replyToken, [textMessage]);
+        } catch (err) {
+          console.error('Wiki 讀取錯誤:', err);
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 讀取 Wiki 失敗：${err.message}` });
+        }
+      }
+
+      // 4. 追加內容至現有 Wiki 筆記
+      const appendMatch = userInput.match(/^!wiki\s+(?:append|追加)\s+([^\s]+)\s+([\s\S]+)$/i);
+      if (appendMatch) {
+        const targetPath = appendMatch[1];
+        const appendText = appendMatch[2];
+        try {
+          await showLoadingAnimation(userId, 20);
+          const publishRes = await wikiHelper.publishNote(targetPath, `\n\n${appendText}`, { append: true });
+          const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, `已追加筆記至 ${targetPath}`);
+          return client.replyMessage(event.replyToken, [flexMsg]);
+        } catch (err) {
+          console.error('Wiki 追加錯誤:', err);
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 追加 Wiki 內容失敗：${err.message}` });
+        }
+      }
+
+      // 5. 直接發布 Wiki 筆記：!wiki <path> <markdown> 或 !wiki <markdown>
+      const publishMatch = userInput.match(/^!wiki\s+(?:post\s+)?([^\s\n]+)?\s*([\s\S]*)$/i);
+      if (publishMatch) {
+        let notePath = publishMatch[1];
+        let content = publishMatch[2];
+
+        // 若第一個參數其實是標題或內容開頭 (如 # 標題 或長文)
+        if (notePath && (notePath.startsWith('#') || notePath.length > 40 || !content)) {
+          content = userInput.replace(/^!wiki\s+/i, '');
+          notePath = `note-${Date.now()}`;
+        }
+
+        if (!content || content.trim().length === 0) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '💡 請輸入要發布的內容，例如：\n!wiki my-path # 我的筆記標題\n這是筆記內容...'
+          });
+        }
+
+        try {
+          await showLoadingAnimation(userId, 20);
+          const publishRes = await wikiHelper.publishNote(notePath, content.trim());
+          const firstLine = content.trim().split('\n')[0].replace(/^#+\s*/, '');
+          const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, firstLine || notePath, content.trim().slice(0, 150));
+          return client.replyMessage(event.replyToken, [flexMsg]);
+        } catch (err) {
+          console.error('Wiki 發布錯誤:', err);
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 發布 Wiki 筆記失敗：${err.message}` });
+        }
+      }
+    }
+
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -2055,18 +2212,19 @@ ${context}`;
         },
       }
 
-      // 第三個按鈕組 - 大同電鍋食譜、法律諮詢與 888box
+      // 第三個按鈕組 - 大同電鍋食譜、888box 與 David888 Wiki
       const buttons3 = {
         type: 'template',
-        altText: '食譜與雲端空間',
+        altText: '知識與雲端工具',
         template: {
           type: 'buttons',
-          title: '食譜與雲端空間',
-          text: '大同電鍋食譜、法律諮詢與 888box 雲端',
+          title: '知識與雲端工具',
+          text: '食譜、888box 雲端與 Wiki 知識庫',
           actions: [
             { label: '🍲 大同食譜', type: 'message', text: '大同食譜' },
-            { label: '⚖️ 法律諮詢', type: 'message', text: '法律諮詢' },
-            { label: '📦 888box 雲端', type: 'message', text: '!box' }
+            { label: '📦 888box 雲端', type: 'message', text: '!box' },
+            { label: '📖 David888 Wiki', type: 'message', text: '!wiki' },
+            { label: '⚖️ 法律諮詢', type: 'message', text: '法律諮詢' }
           ],
         },
       }
