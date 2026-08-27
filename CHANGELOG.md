@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-08-27
+
+### 🚀 Added & Real-Time Web Browsing (2MD SERP & Web Reader Engine)
+- **2MD Multi-Endpoint Real-Time SERP & Web Reader Integration** (`search_helper.js`):
+  - **High Availability 3-Endpoint Routing**: Primary `https://2md.aiurl.tw/`, Fallback 1 `https://2md.glsoft.ai/`, Fallback 2 `https://create360.ai/`.
+  - **OpenAI Tool Calling (`search_web`)**: Automatically searches live weather, stock market quotes, breaking news, sports scores, and real-time facts.
+  - **OpenAI Tool Calling (`read_web_page`)**: Fetches and parses external web pages, articles, and documents into clean Markdown.
+  - **Multi-Turn Agentic Tool Execution Loop**: Integrated into text conversations and voice message transcriptions to ensure 100% grounded, zero-hallucination real-time responses.
+  - **Manual Commands**: Added `!search <query>`, `!搜尋 <query>`, `!google <query>`, and `!read <url>` / `!2md <url>`.
+  - **Menu Option**: Added `🌐 即時網路搜尋` to `選擇服務` menu.
+
+---
+
 ## [1.4.1] - 2026-08-27
 
 ### 🐛 Fixed

@@ -15,6 +15,7 @@ const { v4: uuidv4 } = require('uuid')
 const Groq = require('groq-sdk')
 const boxHelper = require('./box_helper')
 const wikiHelper = require('./wiki_helper')
+const searchHelper = require('./search_helper')
 
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
@@ -1396,57 +1397,115 @@ async function handleEvent(event) {
         console.log(`✅ 音訊轉錄成功: "${transcription}"`);
 
         // 將轉錄文字送給 GPT 處理
-        const systemPrompt = `你是一個專業、智慧且友善的 AI 助手。回覆一律使用繁體中文。
-【自主發布 Wiki 原則】：當使用者提出長篇、深度分析、教學或報告需求時，請呼叫 publish_to_wiki 工具發布完整 Markdown 文章，並提供摘要。`;
+        const systemPrompt = `你是一個專業、智慧且友善的繁體中文 AI 助手。
+【即時聯網與零幻覺鐵律 (MANDATORY)】：
+你具備即時瀏覽網路與搜尋即時資料的能力 (search_web 與 read_web_page 工具)。
+嚴禁推託說「我無法取得即時資料」或「我無法查詢即時天氣/股價」！
+當使用者詢問即時天氣、今日股價、最新新聞或實時資訊時，你必須主動呼叫 search_web 搜尋即時資料，再根據搜尋結果給出精確回答。
+
+【自主發布 Wiki 原則】：
+當使用者提出長篇、深度分析、教學或報告需求時，請呼叫 publish_to_wiki 工具發布完整 Markdown 文章，並提供摘要。`;
 
         const messages = [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: transcription }
         ];
 
-        const completion = await createChatCompletion({
-          messages: messages,
-          tools: [
-            {
-              type: 'function',
-              function: {
-                name: 'publish_to_wiki',
-                description: '當需要提供長篇、深入分析、研究報告、教學時發布至 David888 Wiki',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    title: { type: 'string', description: '文章標題' },
-                    path_slug: { type: 'string', description: '網址 slug' },
-                    markdown_content: { type: 'string', description: '完整 Markdown 文章' },
-                    summary: { type: 'string', description: '精華摘要' }
-                  },
-                  required: ['title', 'markdown_content', 'summary']
-                }
+        const audioTools = [
+          ...searchHelper.searchTools,
+          {
+            type: 'function',
+            function: {
+              name: 'publish_to_wiki',
+              description: '當需要提供長篇、深入分析、研究報告、教學時發布至 David888 Wiki',
+              parameters: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: '文章標題' },
+                  path_slug: { type: 'string', description: '網址 slug' },
+                  markdown_content: { type: 'string', description: '完整 Markdown 文章' },
+                  summary: { type: 'string', description: '精華摘要' }
+                },
+                required: ['title', 'markdown_content', 'summary']
               }
             }
-          ],
+          }
+        ];
+
+        let currentCompletion = await createChatCompletion({
+          messages: messages,
+          tools: audioTools,
           tool_choice: 'auto',
           max_tokens: 4000
         });
 
-        const choice = completion.choices[0];
+        let turnCount = 0;
+        while (turnCount < 5) {
+          const currentChoice = currentCompletion.choices[0];
+          const toolCalls = currentChoice.message?.tool_calls;
 
-        // 處理 Tool Call
-        if (choice.message && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-          for (const toolCall of choice.message.tool_calls) {
-            if (toolCall.function.name === 'publish_to_wiki') {
+          if (!toolCalls || toolCalls.length === 0) {
+            break;
+          }
+
+          messages.push(currentChoice.message);
+
+          for (const toolCall of toolCalls) {
+            const fnName = toolCall.function.name;
+            let args = {};
+            try {
+              args = JSON.parse(toolCall.function.arguments || '{}');
+            } catch (e) {}
+
+            console.log(`🎤 語音執行 Tool Call [${fnName}]，參數:`, args);
+
+            if (fnName === 'search_web') {
+              const sRes = await searchHelper.searchWeb(args.query);
+              const toolContent = sRes.success 
+                ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
+                : `搜尋失敗: ${sRes.error}`;
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: toolContent
+              });
+            } else if (fnName === 'read_web_page') {
+              const rRes = await searchHelper.readWebPage(args.url);
+              const toolContent = rRes.success
+                ? `解析網頁 [${args.url}] 的內容 (${rRes.endpoint}):\n\n${rRes.content}`
+                : `解析網頁失敗: ${rRes.error}`;
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: toolContent
+              });
+            } else if (fnName === 'publish_to_wiki') {
               try {
-                const args = JSON.parse(toolCall.function.arguments || '{}');
                 const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
                 const publishRes = await wikiHelper.publishNote(slug, args.markdown_content);
                 const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, `🎤 您說：「${transcription}」\n\n${args.summary}`);
                 return client.replyMessage(event.replyToken, [flexMsg]);
               } catch (wikiErr) {
                 console.error('語音 Tool 發布 Wiki 失敗:', wikiErr);
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: `發布 Wiki 失敗: ${wikiErr.message}`
+                });
               }
             }
           }
+
+          turnCount++;
+          currentCompletion = await createChatCompletion({
+            messages: messages,
+            tools: audioTools,
+            tool_choice: 'auto',
+            max_tokens: 4000
+          });
         }
+
+        const choice = currentCompletion.choices[0];
 
         let gptResponse = choice.message?.content || '';
 
@@ -2443,6 +2502,46 @@ ${context}`;
       }
     }
 
+    // 2MD 即時網路搜尋與網頁解析指令
+    const isSearchCommand = userInput.startsWith('!search') || 
+                            userInput.startsWith('!搜尋') || 
+                            userInput.startsWith('!google') || 
+                            userInput.startsWith('!查') ||
+                            userInput.startsWith('!s ') ||
+                            userInput.startsWith('!read') ||
+                            userInput.startsWith('!讀取') ||
+                            userInput.startsWith('!2md');
+
+    if (isSearchCommand) {
+      // 1. 網頁解析為 Markdown: !read <url> / !2md <url>
+      const readMatch = userInput.match(/^(!read|!讀取|!2md)\s+(https?:\/\/.+)$/i);
+      if (readMatch) {
+        const targetUrl = readMatch[2].trim();
+        await showLoadingAnimation(userId, 20);
+        const rRes = await searchHelper.readWebPage(targetUrl);
+        if (rRes.success) {
+          const text = `🌐 網頁解析成功 (${rRes.endpoint})：\n\n${rRes.content.slice(0, 1000)}...`;
+          return client.replyMessage(event.replyToken, { type: 'text', text });
+        } else {
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 網頁解析失敗：${rRes.error}` });
+        }
+      }
+
+      // 2. 即時網路搜尋: !search <query> / !搜尋 <query> / !google <query>
+      const searchMatch = userInput.match(/^(!search|!搜尋|!google|!查|!s)\s+(.+)$/i);
+      if (searchMatch) {
+        const query = searchMatch[2].trim();
+        await showLoadingAnimation(userId, 15);
+        const sRes = await searchHelper.searchWeb(query);
+        if (sRes.success) {
+          const flexMsg = searchHelper.formatSearchFlexMessage(query, sRes.content);
+          return client.replyMessage(event.replyToken, [flexMsg]);
+        } else {
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 搜尋失敗：${sRes.error}` });
+        }
+      }
+    }
+
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -2467,9 +2566,9 @@ ${context}`;
         template: {
           type: 'buttons',
           title: '更多服務',
-          text: '天氣、圖片生成與實用工具',
+          text: '即時搜尋、圖片生成與實用工具',
           actions: [
-            { label: '📍 找附近設施', type: 'message', text: '找附近設施' },
+            { label: '🌐 即時網路搜尋', type: 'message', text: '!search 今日即時頭條新聞' },
             { label: '🌤️ 天氣特報', type: 'message', text: '天氣特報' },
             { label: '🎨 AI 畫圖', type: 'message', text: '畫圖' },
             { label: '🛠️ 線上工具', type: 'message', text: '工具' }
@@ -3162,7 +3261,17 @@ ${context}`;
     // 顯示 Loading Indicator (最長 30 秒)
     await showLoadingAnimation(userId, 30);
 
-    const systemPrompt = `你是一個專業、智慧且友善的 AI 助手。回覆一律使用繁體中文。
+    const systemPrompt = `你是一個專業、智慧、博學且友善的繁體中文 AI 助理。
+
+【即時聯網與零幻覺鐵律 (MANDATORY)】：
+你具備即時瀏覽網路與搜尋即時資料的能力 (search_web 與 read_web_page 工具)。
+嚴禁推託說「我無法取得即時資料」或「我無法查詢即時天氣/股價」！
+當使用者詢問：
+1. 即時天氣、降雨機率、氣溫、紫外線等氣象資訊（例如「高雄鼓山天氣」、「台北今日氣溫」）
+2. 即時股票行情、台股/美股最新報價、加密貨幣實時價格（例如「台積電 股價」、「NVDA 股價」）
+3. 最新新聞、今日事件、體育賽事即時比分
+4. 特定網址內容、公司最新動態、政策法規更新
+你必須主動呼叫 search_web 搜尋即時資料，再根據搜尋結果給出精確回答！若需要閱讀特定網址詳細內文，可呼叫 read_web_page。
 
 【自主發布 Wiki 原則】：
 - 對於簡短問答、日常問候、簡要查詢，請直接給出清晰簡練的繁體中文回覆。
@@ -3178,6 +3287,7 @@ ${context}`;
     ];
 
     const tools = [
+      ...searchHelper.searchTools,
       {
         type: 'function',
         function: {
@@ -3235,7 +3345,7 @@ ${context}`;
       }
     ];
 
-    const completion = await createChatCompletion({
+    let currentCompletion = await createChatCompletion({
       temperature: 0.7,
       messages: messages,
       tools: tools,
@@ -3243,14 +3353,48 @@ ${context}`;
       max_tokens: 4000,
     });
 
-    const choice = completion.choices[0];
+    let turnCount = 0;
+    while (turnCount < 5) {
+      const currentChoice = currentCompletion.choices[0];
+      const toolCalls = currentChoice.message?.tool_calls;
 
-    // 1. 第一道防線：處理 OpenAI Native Tool Calls
-    if (choice.message && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      for (const toolCall of choice.message.tool_calls) {
-        if (toolCall.function.name === 'publish_to_wiki') {
+      if (!toolCalls || toolCalls.length === 0) {
+        break;
+      }
+
+      messages.push(currentChoice.message);
+
+      for (const toolCall of toolCalls) {
+        const fnName = toolCall.function.name;
+        let args = {};
+        try {
+          args = JSON.parse(toolCall.function.arguments || '{}');
+        } catch (e) {}
+
+        console.log(`⚡ 執行 Tool Call [${fnName}]，參數:`, args);
+
+        if (fnName === 'search_web') {
+          const sRes = await searchHelper.searchWeb(args.query);
+          const toolContent = sRes.success 
+            ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
+            : `搜尋失敗: ${sRes.error}`;
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: toolContent
+          });
+        } else if (fnName === 'read_web_page') {
+          const rRes = await searchHelper.readWebPage(args.url);
+          const toolContent = rRes.success
+            ? `解析網頁 [${args.url}] 的內容 (${rRes.endpoint}):\n\n${rRes.content}`
+            : `解析網頁失敗: ${rRes.error}`;
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: toolContent
+          });
+        } else if (fnName === 'publish_to_wiki') {
           try {
-            const args = JSON.parse(toolCall.function.arguments || '{}');
             const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
             const publishRes = await wikiHelper.publishNote(slug, args.markdown_content, {
               theme: args.theme || 'claude-canvas'
@@ -3259,19 +3403,39 @@ ${context}`;
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (wikiErr) {
             console.error('Tool 呼叫發布 Wiki 失敗:', wikiErr);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `發布 Wiki 失敗: ${wikiErr.message}`
+            });
           }
-        } else if (toolCall.function.name === 'save_asset_to_888box') {
+        } else if (fnName === 'save_asset_to_888box') {
           try {
-            const args = JSON.parse(toolCall.function.arguments || '{}');
             const result = await boxHelper.uploadFromUrl(args.url, { title: args.title || '雲端資產' });
             const flexMsg = boxHelper.formatAssetFlexMessage(result);
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (boxErr) {
             console.error('Tool 呼叫 888box 轉存失敗:', boxErr);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `轉存 888box 失敗: ${boxErr.message}`
+            });
           }
         }
       }
+
+      turnCount++;
+      currentCompletion = await createChatCompletion({
+        temperature: 0.7,
+        messages: messages,
+        tools: tools,
+        tool_choice: 'auto',
+        max_tokens: 4000
+      });
     }
+
+    const choice = currentCompletion.choices[0];
 
     let rawContent = choice.message?.content || '';
 
