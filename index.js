@@ -1198,22 +1198,91 @@ async function handleEvent(event) {
         console.log(`✅ 音訊轉錄成功: "${transcription}"`);
 
         // 將轉錄文字送給 GPT 處理
+        const systemPrompt = `你是一個專業、智慧且友善的 AI 助手。回覆一律使用繁體中文。
+【自主發布 Wiki 原則】：當使用者提出長篇、深度分析、教學或報告需求時，請呼叫 publish_to_wiki 工具發布完整 Markdown 文章，並提供摘要。`;
+
         const messages = [
-          { role: 'system', content: '你是一個有幫助的助手。' },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: transcription }
         ];
 
         const completion = await openai.chat.completions.create({
-          model: process.env.OPEN_AI_MODEL || 'gpt-4o',
+          model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
           messages: messages,
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'publish_to_wiki',
+                description: '當需要提供長篇、深入分析、研究報告、教學時發布至 David888 Wiki',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string', description: '文章標題' },
+                    path_slug: { type: 'string', description: '網址 slug' },
+                    markdown_content: { type: 'string', description: '完整 Markdown 文章' },
+                    summary: { type: 'string', description: '精華摘要' }
+                  },
+                  required: ['title', 'markdown_content', 'summary']
+                }
+              }
+            }
+          ],
+          tool_choice: 'auto',
+          max_tokens: 4000
         });
 
-        const gptResponse = completion.choices[0].message.content;
+        const choice = completion.choices[0];
 
-        // 回覆 GPT 的回應
+        // 處理 Tool Call
+        if (choice.message && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+          for (const toolCall of choice.message.tool_calls) {
+            if (toolCall.function.name === 'publish_to_wiki') {
+              try {
+                const args = JSON.parse(toolCall.function.arguments || '{}');
+                const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
+                const publishRes = await wikiHelper.publishNote(slug, args.markdown_content);
+                const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, `🎤 您說：「${transcription}」\n\n${args.summary}`);
+                return client.replyMessage(event.replyToken, [flexMsg]);
+              } catch (wikiErr) {
+                console.error('語音 Tool 發布 Wiki 失敗:', wikiErr);
+              }
+            }
+          }
+        }
+
+        let gptResponse = choice.message?.content || '';
+
+        // 攔截偽 Tool Call
+        const pseudoCall = wikiHelper.extractPseudoWikiCall(gptResponse);
+        if (pseudoCall && pseudoCall.content) {
+          try {
+            const slug = wikiHelper.sanitizePath(pseudoCall.slug || pseudoCall.title);
+            const publishRes = await wikiHelper.publishNote(slug, pseudoCall.content);
+            const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
+            const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, `🎤 您說：「${transcription}」\n\n${summary}`);
+            return client.replyMessage(event.replyToken, [flexMsg]);
+          } catch (wikiErr) {
+            console.error('語音偽 Tool Call 發布失敗:', wikiErr);
+          }
+        }
+
+        // 智慧長文攔截
+        if (gptResponse.length > 600 && (gptResponse.includes('## ') || gptResponse.includes('```'))) {
+          try {
+            const slug = `audio-note-${Date.now()}`;
+            const publishRes = await wikiHelper.publishNote(slug, gptResponse);
+            const summary = gptResponse.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
+            const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, transcription.slice(0, 30), `🎤 您說：「${transcription}」\n\n${summary}`);
+            return client.replyMessage(event.replyToken, [flexMsg]);
+          } catch (wikiErr) {}
+        }
+
+        // 清理殘留標籤並回覆
+        const cleanedText = gptResponse.replace(/\[(?:CALL:\/?\w+|TOOL_CALL:\w+)[^\]]*\]/gi, '').trim();
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: `🎤 您說：「${transcription}」\n\n${gptResponse}`
+          text: `🎤 您說：「${transcription}」\n\n${cleanedText || gptResponse}`
         });
 
       } catch (error) {
@@ -2981,7 +3050,7 @@ ${context}`;
 
     const choice = completion.choices[0];
 
-    // 1. 處理 LLM 主動呼叫 Tool 的情況
+    // 1. 第一道防線：處理 OpenAI Native Tool Calls
     if (choice.message && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
       for (const toolCall of choice.message.tool_calls) {
         if (toolCall.function.name === 'publish_to_wiki') {
@@ -3009,9 +3078,52 @@ ${context}`;
       }
     }
 
-    const rawContent = choice.message?.content || '';
+    let rawContent = choice.message?.content || '';
 
-    // 2. 智慧防呆：若 LLM 未主動觸發 tool 但生成了長篇結構化 Markdown 分析（> 600 字元且有標題/代碼）
+    // 2. 第二道防線：攔截偽 Tool Call 指令 (如 [CALL:/wiki ...], [CALL:wiki ...], <tool_call> 等)
+    // 防止開源模型或未支援 Function Calling 的模型將內部偽代碼直接輸出給用戶
+    const pseudoCall = wikiHelper.extractPseudoWikiCall(rawContent);
+    if (pseudoCall && pseudoCall.content) {
+      console.log('⚡ 成功攔截偽 Tool Call 指令，自動提取內容發布至 David888 Wiki...', pseudoCall.slug);
+      try {
+        const slug = wikiHelper.sanitizePath(pseudoCall.slug || pseudoCall.title);
+        const publishRes = await wikiHelper.publishNote(slug, pseudoCall.content, {
+          theme: pseudoCall.theme || 'claude-canvas'
+        });
+        const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
+        const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, summary);
+        return client.replyMessage(event.replyToken, [flexMsg]);
+      } catch (wikiErr) {
+        console.error('偽 Tool Call 發布 Wiki 失敗:', wikiErr);
+      }
+    }
+
+    // 3. 第三道防線：使用者明確要求透過 Wiki 發布 (例如「你透過 david888 wiki 寫一個...」)
+    const userWantsWiki = /wiki|知識庫|寫到wiki|發布到wiki|存到wiki/i.test(userInput);
+    if (userWantsWiki && rawContent.length > 100) {
+      console.log('⚡ 使用者明確要求 Wiki 發布，自動生成文章...');
+      const lines = rawContent.split('\n');
+      let title = '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#')) {
+          title = trimmed.replace(/^#+\s*/, '');
+          break;
+        }
+      }
+      if (!title) title = userInput.replace(/.*(?:wiki|知識庫)\s*/i, '').slice(0, 30) || 'Wiki 文章筆記';
+      const slug = `wiki-${Date.now()}`;
+      try {
+        const publishRes = await wikiHelper.publishNote(slug, rawContent, { theme: 'claude-canvas' });
+        const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
+        const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
+        return client.replyMessage(event.replyToken, [flexMsg]);
+      } catch (wikiErr) {
+        console.warn('用戶指定 Wiki 發布失敗，降級為純文字發送:', wikiErr);
+      }
+    }
+
+    // 4. 第四道防線：智慧長文自動攔截（> 600 字元且有結構）
     const hasMarkdownStructure = rawContent.includes('## ') || rawContent.includes('### ') || rawContent.includes('```');
     if (rawContent.length > 600 && hasMarkdownStructure) {
       console.log('⚡ 偵測到長篇 Markdown 分析內容，自動為用戶發布至 David888 Wiki...');
@@ -3036,8 +3148,9 @@ ${context}`;
       }
     }
 
-    // 3. 一般短篇問答直接回覆文字
-    const echo = { type: 'text', text: rawContent || '抱歉，我沒有話可說了。' };
+    // 5. 一般短篇問答直接回覆文字（若包含未清理的殘留標籤一併清理）
+    const cleanedText = rawContent.replace(/\[(?:CALL:\/?\w+|TOOL_CALL:\w+)[^\]]*\]/gi, '').trim();
+    const echo = { type: 'text', text: cleanedText || rawContent || '抱歉，我沒有話可說了。' };
     return client.replyMessage(event.replyToken, [echo]);
   } catch (err) {
     console.log(err)

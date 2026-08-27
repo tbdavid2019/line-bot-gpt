@@ -293,6 +293,87 @@ function formatWikiFlexMessage(wikiResult, title = '', summary = '') {
   };
 }
 
+/**
+ * 攔截並解析模型可能輸出的偽 Tool Call 文字 (如 [CALL:/wiki ...], [CALL:wiki ...], <tool_call> 等)
+ * 防止未經執行的內部調用指令外洩給用戶，並自動提取參數完成 Wiki 發布
+ * @param {string} text - 模型回應原始文字
+ */
+function extractPseudoWikiCall(text) {
+  if (!text || typeof text !== 'string') return null;
+
+  // 1. 匹配 [CALL:/wiki ...] 或 [CALL:wiki ...] 或 [TOOL_CALL:publish_to_wiki ...]
+  const pseudoMatch = text.match(/\[(?:CALL:\/?wiki|TOOL_CALL:publish_to_wiki|CALL:\/?publish)\s+([\s\S]+?)\](?:\s*$)?/i);
+  if (pseudoMatch) {
+    const rawJson = pseudoMatch[1].trim();
+    try {
+      const parsed = JSON.parse(rawJson);
+      return {
+        slug: parsed.slug || parsed.path_slug || `note-${Date.now()}`,
+        title: parsed.title || 'David888 Wiki 筆記',
+        content: parsed.content || parsed.markdown_content || parsed.text || '',
+        summary: parsed.summary || parsed.description || '',
+        theme: parsed.theme || 'claude-canvas'
+      };
+    } catch (e) {
+      // 容錯解析：提取常見欄位
+      const slugM = rawJson.match(/"(?:slug|path_slug)"\s*:\s*"([^"]+)"/i);
+      const titleM = rawJson.match(/"title"\s*:\s*"([^"]+)"/i);
+      let content = '';
+      const contentIdx = rawJson.indexOf('"content":');
+      if (contentIdx !== -1) {
+        let afterContent = rawJson.slice(contentIdx + 10).trim();
+        if (afterContent.startsWith('"')) afterContent = afterContent.slice(1);
+        const lastQ = afterContent.lastIndexOf('"');
+        if (lastQ !== -1) afterContent = afterContent.slice(0, lastQ);
+        content = afterContent.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      }
+      if (content) {
+        return {
+          slug: slugM ? slugM[1] : `note-${Date.now()}`,
+          title: titleM ? titleM[1] : 'David888 Wiki 筆記',
+          content: content,
+          summary: '',
+          theme: 'claude-canvas'
+        };
+      }
+    }
+  }
+
+  // 2. 匹配 ```json { "name": "publish_to_wiki", ... } 或 { "action": "publish_to_wiki", ... }
+  const jsonBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?"(?:publish_to_wiki|publishNote|wiki)"[\s\S]*?\})\s*```/i);
+  if (jsonBlockMatch) {
+    try {
+      const parsed = JSON.parse(jsonBlockMatch[1]);
+      const args = parsed.arguments || parsed.parameters || parsed;
+      return {
+        slug: args.slug || args.path_slug || `note-${Date.now()}`,
+        title: args.title || 'David888 Wiki 筆記',
+        content: args.content || args.markdown_content || args.text || '',
+        summary: args.summary || '',
+        theme: args.theme || 'claude-canvas'
+      };
+    } catch (e) {}
+  }
+
+  // 3. 匹配 <tool_call> 標籤
+  const toolTagMatch = text.match(/<tool_call>\s*([\s\S]+?)\s*<\/tool_call>/i);
+  if (toolTagMatch) {
+    try {
+      const parsed = JSON.parse(toolTagMatch[1]);
+      const args = parsed.arguments || parsed.parameters || parsed;
+      return {
+        slug: args.slug || args.path_slug || `note-${Date.now()}`,
+        title: args.title || 'David888 Wiki 筆記',
+        content: args.content || args.markdown_content || args.text || '',
+        summary: args.summary || '',
+        theme: args.theme || 'claude-canvas'
+      };
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 module.exports = {
   BASE_URL,
   API_BASE_URL,
@@ -300,5 +381,6 @@ module.exports = {
   publishNote,
   readNote,
   parseUrlToMarkdown,
-  formatWikiFlexMessage
+  formatWikiFlexMessage,
+  extractPseudoWikiCall
 };

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-08-27
+
+### 🛡️ Security & Robustness
+- **Multi-Layer Pseudo Tool Call Interceptor (`wiki_helper.extractPseudoWikiCall`)**:
+  - Intercepts and parses raw unexecuted pseudo tool call strings (e.g. `[CALL:/wiki ...]`, `[CALL:wiki ...]`, `<tool_call>...</tool_call>`, ````json {"name": "publish_to_wiki"} ````).
+  - Automatically extracts the slug, title, and Markdown content from the leaked string, publishes the note to David888 Wiki, and sends the user a clean Flex message.
+  - Strips any leftover technical pseudo-call tags before delivering messages, completely preventing raw code or pseudo-syntax leakage in LINE chat.
+  - Added user intent trigger (`/wiki|知識庫|寫到wiki/i`) so requests like "你透過 david888 wiki 寫一個..." always publish to Wiki seamlessly.
+  - Unified voice message (`audio`) handling with the same multi-layer Wiki publishing engine and tool calling.
+
+---
+
 ## [1.3.0] - 2026-08-27
 
 ### 🚀 Added
