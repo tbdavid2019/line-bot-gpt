@@ -13,6 +13,7 @@ const { spawn } = require('child_process')
 const { searchNearbyPlaces, formatPlacesMessage } = require('./maps_helper')
 const { v4: uuidv4 } = require('uuid')
 const Groq = require('groq-sdk')
+const boxHelper = require('./box_helper')
 
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
@@ -109,8 +110,8 @@ async function showLoadingAnimation(chatId, seconds = 20) {
   }
 }
 
-// 從 LINE 下載圖片內容
-async function downloadImageFromLine(messageId) {
+// 從 LINE 下載多媒體內容 (圖片/音訊/影片/檔案)
+async function downloadMediaFromLine(messageId, mediaType = 'media') {
   try {
     const stream = await client.getMessageContent(messageId);
     const chunks = [];
@@ -120,32 +121,17 @@ async function downloadImageFromLine(messageId) {
     }
 
     const buffer = Buffer.concat(chunks);
-    console.log(`✅ 成功下載圖片，大小: ${buffer.length} bytes`);
+    console.log(`✅ 成功下載 ${mediaType}，大小: ${buffer.length} bytes`);
     return buffer;
   } catch (error) {
-    console.error('❌ 下載圖片失敗:', error);
+    console.error(`❌ 下載 ${mediaType} 失敗:`, error);
     return null;
   }
 }
 
-// 從 LINE 下載音訊內容
-async function downloadAudioFromLine(messageId) {
-  try {
-    const stream = await client.getMessageContent(messageId);
-    const chunks = [];
-
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-
-    const buffer = Buffer.concat(chunks);
-    console.log(`✅ 成功下載音訊，大小: ${buffer.length} bytes`);
-    return buffer;
-  } catch (error) {
-    console.error('❌ 下載音訊失敗:', error);
-    return null;
-  }
-}
+// 相容舊有別名
+const downloadImageFromLine = (messageId) => downloadMediaFromLine(messageId, '圖片');
+const downloadAudioFromLine = (messageId) => downloadMediaFromLine(messageId, '音訊');
 
 // 使用 Groq Whisper 轉錄音訊
 async function transcribeAudioWithGroq(audioBuffer) {
@@ -364,23 +350,22 @@ async function editImageWithGemini(imageBuffer, editPrompt, userId) {
         const inlineData = chunk.candidates[0].content.parts[0].inlineData;
         const buffer = Buffer.from(inlineData.data || '', 'base64');
 
-        // 上傳圖片到 Google Cloud Storage
-        const imageUrl = await uploadImageToGCS(buffer, inlineData.mimeType, `edited_${editPrompt}`);
+        // 統一上傳圖片到 888box / GCS / 本地
+        const uploadResult = await uploadImageAsset(buffer, inlineData.mimeType, `edited_${editPrompt}`);
 
-        if (imageUrl) {
-          console.log('✅ 圖片編輯完成並上傳');
+        if (uploadResult.url) {
+          console.log(`✅ 圖片編輯完成並上傳 (${uploadResult.storageType})`);
           return {
             success: true,
-            imageUrl: imageUrl,
+            imageUrl: uploadResult.url,
+            shareUrl: uploadResult.shareUrl,
             buffer: buffer,
             mimeType: inlineData.mimeType
           };
         } else {
-          // 如果無法上傳到雲端，則保存到本地
-          const savedPath = await saveImageLocally(buffer, inlineData.mimeType, `edited_${editPrompt}`);
           return {
             success: true,
-            localPath: savedPath,
+            localPath: uploadResult.localPath,
             buffer: buffer,
             mimeType: inlineData.mimeType
           };
@@ -449,10 +434,38 @@ async function generateImageWithGeminiPush(prompt, source, userId) {
         const inlineData = chunk.candidates[0].content.parts[0].inlineData;
         const buffer = Buffer.from(inlineData.data || '', 'base64');
 
-        // 上傳圖片到 Google Cloud Storage
-        const imageUrl = await uploadImageToGCS(buffer, inlineData.mimeType, prompt);
+        // 統一上傳圖片到 888box / GCS / 本地
+        const uploadResult = await uploadImageAsset(buffer, inlineData.mimeType, prompt);
 
-        if (imageUrl) {
+        if (uploadResult.url) {
+          const footerContents = [
+            {
+              type: 'button',
+              action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' },
+              style: 'primary',
+              color: '#1DB446',
+              height: 'sm'
+            }
+          ];
+
+          if (uploadResult.shareUrl) {
+            footerContents.push({
+              type: 'button',
+              action: { type: 'uri', label: '🌐 在 888box 檢視', uri: uploadResult.shareUrl },
+              style: 'secondary',
+              color: '#2F80ED',
+              height: 'sm'
+            });
+          }
+
+          footerContents.push({
+            type: 'button',
+            action: { type: 'message', label: '✖️ 退出', text: '取消' },
+            style: 'secondary',
+            color: '#AAAAAA',
+            height: 'sm'
+          });
+
           const successFlexMessage = {
             type: 'flex',
             altText: '✅ 圖片生成成功',
@@ -460,42 +473,65 @@ async function generateImageWithGeminiPush(prompt, source, userId) {
               type: 'bubble',
               hero: {
                 type: 'image',
-                url: imageUrl,
+                url: uploadResult.url,
                 size: 'full',
                 aspectRatio: '1:1',
                 aspectMode: 'cover',
                 action: {
                   type: 'uri',
-                  uri: imageUrl
+                  uri: uploadResult.shareUrl || uploadResult.url
                 }
               },
-              header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
-              body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }] },
-              footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+              header: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }],
+                backgroundColor: '#1DB446',
+                paddingAll: 'lg'
+              },
+              body: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  { type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' },
+                  { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' },
+                  { type: 'separator', margin: 'md' },
+                  {
+                    type: 'box',
+                    layout: 'horizontal',
+                    margin: 'sm',
+                    contents: [
+                      { type: 'text', text: '儲存空間', size: 'xs', color: '#999999', flex: 3 },
+                      { type: 'text', text: uploadResult.storageType === '888box' ? '888box CloudFront CDN' : 'Google Cloud Storage', size: 'xs', color: '#666666', flex: 7 }
+                    ]
+                  }
+                ]
+              },
+              footer: {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'sm',
+                contents: footerContents
+              }
             }
           };
 
           await client.pushMessage(userId, successFlexMessage);
           imageGenerated = true;
-        } else {
-          // 如果無法上傳到雲端，則保存到本地
-          const savedPath = await saveImageLocally(buffer, inlineData.mimeType, prompt);
+        } else if (uploadResult.localPath) {
+          const successFlexMessage = {
+            type: 'flex',
+            altText: '✅ 圖片生成成功',
+            contents: {
+              type: 'bubble',
+              header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
+              body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '📋 儲存位置', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '已保存至伺服器本地', size: 'sm', color: '#666666', margin: 'sm' }, { type: 'text', text: '⚠️ 圖片已保存在 images 資料夾', size: 'xs', color: '#999999', wrap: true, margin: 'sm' }] },
+              footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+            }
+          };
 
-          if (savedPath) {
-            const successFlexMessage = {
-              type: 'flex',
-              altText: '✅ 圖片生成成功',
-              contents: {
-                type: 'bubble',
-                header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
-                body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '📋 儲存位置', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '已保存至伺服器本地', size: 'sm', color: '#666666', margin: 'sm' }, { type: 'text', text: '⚠️ 由於雲端儲存配置問題，圖片已保存在 images 資料夾', size: 'xs', color: '#999999', wrap: true, margin: 'sm' }] },
-                footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
-              }
-            };
-
-            await client.pushMessage(userId, [successFlexMessage]);
-            imageGenerated = true;
-          }
+          await client.pushMessage(userId, [successFlexMessage]);
+          imageGenerated = true;
         }
       }
       // 處理文字回應
@@ -518,6 +554,51 @@ async function generateImageWithGeminiPush(prompt, source, userId) {
     const errorMessage = { type: 'text', text: '❌ 抱歉，圖片生成服務目前無法使用。請檢查 GEMINI_API_KEY 是否正確設定。' };
     await client.pushMessage(userId, [errorMessage]);
   }
+}
+
+// 統一上傳圖片資產（優先 888box 多端點 CloudFront CDN，次選 Google Cloud Storage，再次本地）
+async function uploadImageAsset(buffer, mimeType, prompt) {
+  const fileExtension = getFileExtensionFromMimeType(mimeType) || 'png';
+  const filename = `gemini_${Date.now()}_${uuidv4().slice(0, 8)}.${fileExtension}`;
+
+  // 1. 優先上傳至 888box (具備 CDN 加速與 WebP 自動最佳化)
+  try {
+    const boxResult = await boxHelper.uploadBuffer(buffer, filename, mimeType, {
+      title: prompt ? prompt.slice(0, 100) : 'Gemini Generated Image'
+    });
+    if (boxResult && boxResult.url) {
+      console.log(`✅ 圖片已成功上傳至 888box (${boxResult.endpoint}): ${boxResult.url}`);
+      return {
+        url: boxResult.url,
+        shareUrl: boxResult.shareUrl,
+        storageType: '888box',
+        endpoint: boxResult.endpoint
+      };
+    }
+  } catch (boxErr) {
+    console.warn('⚠️ 888box 上傳未成功，切換至 Google Cloud Storage:', boxErr.message);
+  }
+
+  // 2. 備用：Google Cloud Storage
+  try {
+    const gcsUrl = await uploadImageToGCS(buffer, mimeType, prompt);
+    if (gcsUrl) {
+      return {
+        url: gcsUrl,
+        shareUrl: gcsUrl,
+        storageType: 'gcs'
+      };
+    }
+  } catch (gcsErr) {
+    console.warn('⚠️ GCS 上傳失敗:', gcsErr.message);
+  }
+
+  // 3. 備用：本地儲存
+  const localPath = await saveImageLocally(buffer, mimeType, prompt);
+  return {
+    localPath: localPath,
+    storageType: 'local'
+  };
 }
 
 // 上傳圖片到 Google Cloud Storage
@@ -1003,6 +1084,11 @@ async function handleEvent(event) {
             },
             {
               type: 'message',
+              label: '☁️ 存入 888box',
+              text: '存入 888box'
+            },
+            {
+              type: 'message',
               label: '❌ 取消',
               text: '取消'
             }
@@ -1011,6 +1097,72 @@ async function handleEvent(event) {
       };
 
       return client.replyMessage(event.replyToken, [selectMessage]);
+    }
+
+    // 處理影片訊息
+    if (event.type === 'message' && event.message.type === 'video') {
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
+      const messageId = event.message.id;
+
+      console.log('🎬 收到影片訊息:', { userId, messageId });
+      await showLoadingAnimation(userId, 30);
+
+      try {
+        const videoBuffer = await downloadMediaFromLine(messageId, '影片');
+        if (!videoBuffer) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '❌ 抱歉，無法下載影片檔案。'
+          });
+        }
+
+        const filename = `line_video_${Date.now()}.mp4`;
+        const result = await boxHelper.uploadBuffer(videoBuffer, filename, 'video/mp4', {
+          title: `LINE 影片 (${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })})`
+        });
+
+        const flexMessage = boxHelper.formatAssetFlexMessage(result);
+        return client.replyMessage(event.replyToken, [flexMessage]);
+      } catch (error) {
+        console.error('❌ 上傳影片至 888box 失敗:', error);
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `❌ 影片儲存至 888box 失敗：${error.message}`
+        });
+      }
+    }
+
+    // 處理檔案訊息 (文件、壓縮檔等)
+    if (event.type === 'message' && event.message.type === 'file') {
+      const userId = event.source.userId || event.source.groupId || event.source.roomId;
+      const messageId = event.message.id;
+      const fileName = event.message.fileName || `file_${Date.now()}.bin`;
+
+      console.log('📄 收到檔案訊息:', { userId, messageId, fileName });
+      await showLoadingAnimation(userId, 30);
+
+      try {
+        const fileBuffer = await downloadMediaFromLine(messageId, '檔案');
+        if (!fileBuffer) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '❌ 抱歉，無法下載檔案。'
+          });
+        }
+
+        const result = await boxHelper.uploadBuffer(fileBuffer, fileName, 'application/octet-stream', {
+          title: fileName
+        });
+
+        const flexMessage = boxHelper.formatAssetFlexMessage(result);
+        return client.replyMessage(event.replyToken, [flexMessage]);
+      } catch (error) {
+        console.error('❌ 上傳檔案至 888box 失敗:', error);
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `❌ 檔案儲存至 888box 失敗：${error.message}`
+        });
+      }
     }
 
     // 處理音訊訊息
@@ -1094,7 +1246,7 @@ async function handleEvent(event) {
       // 如果沒有設定 LINE_BOT_USER_ID，則檢查訊息是否以機器人名稱開頭
       if (!botUserId || !botUserId.startsWith('U')) {
         // 備用方案：檢查訊息是否包含常見的機器人呼叫方式或 @ 符號
-        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲', '天氣特報']
+        const botTriggers = ['bot', '機器人', '@728wsrjq', '@', '選擇服務', '解答之書', '唐詩', '淺草籤', '奇門遁甲', '天氣特報', '!box', '888box', 'box', '轉存', '下載', '雲端空間', '播客']
         const hasValidTrigger = botTriggers.some(trigger =>
           event.message.text.toLowerCase().includes(trigger.toLowerCase())
         )
@@ -1511,6 +1663,36 @@ ${context}`;
           text: '✏️ 請描述如何編輯這張圖片？\n\n範例：\n• 把背景改成海邊\n• 改成卡通風格\n• 加上彩虹和雲朵\n• 讓顏色更鮮豔\n\n如要取消，請輸入「取消」'
         };
         return client.replyMessage(event.replyToken, [promptMessage]);
+
+      } else if (intent === 'save_box' || userInput === '存入 888box' || userInput === '存入' || userInput === '轉存' || userInput === '保存' || userInput.toLowerCase().includes('box')) {
+        // 儲存至 888box
+        try {
+          await showLoadingAnimation(userId, 30);
+
+          const imageBuffer = await downloadImageFromLine(userState.messageId);
+          if (!imageBuffer) {
+            userStates.delete(userId);
+            const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
+            return client.replyMessage(event.replyToken, [errorMsg]);
+          }
+
+          const filename = `line_img_${Date.now()}.jpg`;
+          const result = await boxHelper.uploadBuffer(imageBuffer, filename, 'image/jpeg', {
+            title: `LINE 圖片 (${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })})`
+          });
+
+          userStates.delete(userId);
+
+          const flexMessage = boxHelper.formatAssetFlexMessage(result);
+          return client.replyMessage(event.replyToken, [flexMessage]);
+        } catch (error) {
+          console.error('❌ 上傳圖片至 888box 失敗:', error);
+          userStates.delete(userId);
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `❌ 圖片儲存至 888box 失敗：${error.message}`
+          });
+        }
       }
     }
 
@@ -1730,6 +1912,115 @@ ${context}`;
       return Promise.resolve(null);
     }
 
+    // 888box 資產轉存 / 統計 / 查詢 / 播客指令
+    const isBoxCommand = userInput.startsWith('!box') || 
+                         userInput.startsWith('!888box') || 
+                         userInput.startsWith('!save') || 
+                         userInput.startsWith('!轉存') || 
+                         userInput.startsWith('!下載') || 
+                         userInput === '888box' || 
+                         userInput === '雲端空間' || 
+                         userInput === 'box';
+
+    if (isBoxCommand) {
+      // 1. 播客資訊
+      if (userInput === '!box podcast' || userInput === 'podcast' || userInput === '播客') {
+        try {
+          const podcastInfo = await boxHelper.getPodcastInfo();
+          const podcastMessage = {
+            type: 'flex',
+            altText: '🎙️ 888box Podcast 播客訂閱',
+            contents: {
+              type: 'bubble',
+              header: {
+                type: 'box',
+                layout: 'vertical',
+                backgroundColor: '#9B51E0',
+                paddingAll: 'lg',
+                contents: [{ type: 'text', text: '🎙️ 888box Podcast 訂閱源', weight: 'bold', size: 'lg', color: '#FFFFFF' }]
+              },
+              body: {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'md',
+                contents: [
+                  { type: 'text', text: '已自動將上傳的音訊與影片生成 Podcast RSS 訂閱源，可直接加入 Apple Podcasts, Spotify 等播放器：', size: 'sm', wrap: true, color: '#666666' },
+                  { type: 'separator' },
+                  { type: 'text', text: '🎬 影片 Podcast RSS', size: 'xs', weight: 'bold', color: '#999999' },
+                  { type: 'text', text: podcastInfo.videoRss, size: 'xs', color: '#2F80ED', wrap: true },
+                  { type: 'text', text: '🎵 音訊 Podcast RSS', size: 'xs', weight: 'bold', color: '#999999', margin: 'md' },
+                  { type: 'text', text: podcastInfo.audioRss, size: 'xs', color: '#2F80ED', wrap: true }
+                ]
+              },
+              footer: {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'sm',
+                contents: [
+                  {
+                    type: 'button',
+                    style: 'primary',
+                    color: '#9B51E0',
+                    height: 'sm',
+                    action: { type: 'uri', label: '🌐 開啟 888box', uri: podcastInfo.endpoint || 'https://box.david888.com' }
+                  }
+                ]
+              }
+            }
+          };
+          return client.replyMessage(event.replyToken, [podcastMessage]);
+        } catch (err) {
+          console.error('獲取 Podcast 資訊錯誤:', err);
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 獲取播客資訊失敗：${err.message}` });
+        }
+      }
+
+      // 2. 統計資訊
+      if (userInput === '!box' || userInput === '!888box' || userInput === '!box stats' || userInput === '888box' || userInput === '雲端空間' || userInput === 'box') {
+        try {
+          await showLoadingAnimation(userId, 10);
+          const stats = await boxHelper.getStats();
+          const statsFlex = boxHelper.formatStatsFlexMessage(stats);
+          return client.replyMessage(event.replyToken, [statsFlex]);
+        } catch (err) {
+          console.error('獲取 888box 統計錯誤:', err);
+          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 獲取 888box 統計失敗：${err.message}` });
+        }
+      }
+
+      // 3. 遠端 URL 轉存 / 下載
+      let targetUrl = '';
+      const prefixMatch = userInput.match(/^(!box|!888box|!save|!轉存|!下載)\s+(.+)$/i);
+      if (prefixMatch) {
+        targetUrl = prefixMatch[2].trim();
+      }
+
+      if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
+        await showLoadingAnimation(userId, 45);
+        await client.replyMessage(event.replyToken, { type: 'text', text: `📥 正在將遠端資產轉存至 888box...\n🔗 來源：${targetUrl}\n⏳ 請稍候...` });
+
+        setTimeout(async () => {
+          try {
+            const result = await boxHelper.uploadFromUrl(targetUrl, {
+              title: `轉存資產 (${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })})`
+            });
+            const flexMsg = boxHelper.formatAssetFlexMessage(result);
+            await client.pushMessage(userId, [flexMsg]);
+          } catch (err) {
+            console.error('888box 轉存失敗:', err);
+            await client.pushMessage(userId, { type: 'text', text: `❌ 轉存失敗：${err.message}` });
+          }
+        }, 500);
+
+        return Promise.resolve(null);
+      } else if (prefixMatch) {
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '💡 請輸入完整的網址，例如：\n!box https://example.com/video.mp4\n!轉存 https://example.com/image.jpg'
+        });
+      }
+    }
+
     if (userInput === '選擇服務') {
       const buttons = {
         type: 'template',
@@ -1764,17 +2055,18 @@ ${context}`;
         },
       }
 
-      // 第三個按鈕組 - 大同電鍋食譜與法律諮詢
+      // 第三個按鈕組 - 大同電鍋食譜、法律諮詢與 888box
       const buttons3 = {
         type: 'template',
-        altText: '食譜與諮詢',
+        altText: '食譜與雲端空間',
         template: {
           type: 'buttons',
-          title: '食譜與諮詢',
-          text: '大同電鍋食譜與法律諮詢',
+          title: '食譜與雲端空間',
+          text: '大同電鍋食譜、法律諮詢與 888box 雲端',
           actions: [
             { label: '🍲 大同食譜', type: 'message', text: '大同食譜' },
-            { label: '⚖️ 法律諮詢', type: 'message', text: '法律諮詢' }
+            { label: '⚖️ 法律諮詢', type: 'message', text: '法律諮詢' },
+            { label: '📦 888box 雲端', type: 'message', text: '!box' }
           ],
         },
       }
