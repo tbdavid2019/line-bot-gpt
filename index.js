@@ -36,47 +36,55 @@ function getFileExtensionFromMimeType(mimeType) {
 }
 
 // 初始化主要 LLM 客戶端 (Primary: nen.com.tw / gpt-5.6-luna)
-const primaryLlmClient = new OpenAI({
-  apiKey: process.env.OPEN_AI_LINE_SECRET,
+const primaryKey = process.env.OPEN_AI_LINE_SECRET || process.env.OPENAI_API_KEY;
+const primaryLlmClient = primaryKey ? new OpenAI({
+  apiKey: primaryKey,
   baseURL: process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'
-});
+}) : null;
 
 // 初始化備用 LLM 客戶端 (Fallback: Groq / openai/gpt-oss-20b)
-const fallbackLlmClient = new OpenAI({
-  apiKey: process.env.FALLBACK_LLM_KEY,
+const fallbackKey = process.env.FALLBACK_LLM_KEY || process.env.ASR_API_GROQ_KEY;
+const fallbackLlmClient = fallbackKey ? new OpenAI({
+  apiKey: fallbackKey,
   baseURL: process.env.FALLBACK_LLM_BASE_PATH || 'https://api.groq.com/openai/v1'
-});
+}) : null;
 
 // 相容舊有 openai 參考
-const openai = primaryLlmClient;
+const openai = primaryLlmClient || fallbackLlmClient;
 
 // 統一 LLM Chat Completion 呼叫函數（具備自動 Failover）
 async function createChatCompletion(params) {
   // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna)
-  try {
-    const primaryModel = process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
-    const completion = await primaryLlmClient.chat.completions.create({
-      ...params,
-      model: primaryModel
-    });
-    return completion;
-  } catch (primaryErr) {
-    console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至備用端點...`);
+  if (primaryLlmClient) {
+    try {
+      const primaryModel = process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
+      const completion = await primaryLlmClient.chat.completions.create({
+        ...params,
+        model: primaryModel
+      });
+      return completion;
+    } catch (primaryErr) {
+      console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至備用端點...`);
+    }
   }
 
   // 2. 切換至備用端點 (Groq / openai/gpt-oss-20b)
-  try {
-    const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b';
-    console.log(`🤖 使用備用 LLM 端點 (${fallbackModel} @ Groq)...`);
-    const completion = await fallbackLlmClient.chat.completions.create({
-      ...params,
-      model: fallbackModel
-    });
-    return completion;
-  } catch (fallbackErr) {
-    console.error(`❌ 備用 LLM 呼叫失敗: ${fallbackErr.message}`);
-    throw fallbackErr;
+  if (fallbackLlmClient) {
+    try {
+      const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b';
+      console.log(`🤖 使用備用 LLM 端點 (${fallbackModel} @ Groq)...`);
+      const completion = await fallbackLlmClient.chat.completions.create({
+        ...params,
+        model: fallbackModel
+      });
+      return completion;
+    } catch (fallbackErr) {
+      console.error(`❌ 備用 LLM 呼叫失敗: ${fallbackErr.message}`);
+      throw fallbackErr;
+    }
   }
+
+  throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / FALLBACK_LLM_KEY)');
 }
 
 // 初始化 Google Cloud Storage 客戶端

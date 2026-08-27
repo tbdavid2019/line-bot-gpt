@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-08-27
+
+### 🐛 Fixed
+- **OpenAI Client Lazy Initialization & Crash Prevention**:
+  - Fixed an issue where `new OpenAI({ apiKey: undefined })` caused fatal Node.js crashes when optional fallback keys were unset in the environment.
+  - LLM primary and fallback clients are now instantiated safely with existence checks, preventing boot loops.
+
+---
+
 ## [1.4.0] - 2026-08-27
 
 ### 🔄 Changed & Multi-Endpoint High Availability Architecture
