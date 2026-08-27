@@ -50,11 +50,13 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 
 ## 功能 (Features)
 
-- 整合 OpenAI GPT-4o 聊天機器人
+- 🤖 **LLM 自主長文發布引擎 (David888 Wiki)**：當使用者要求深入分析、研究報告、系統架構或完整教學時，LLM 自主生成完整 Markdown 文章發布至 Wiki，並回傳摘要與 3 合 1 閱讀模式（網頁、2D 簡報、電子書）
+- 📦 **888box 雲端多媒體資產庫**：三端點高可用容錯（Primary: `box.david888.com`，Fallback: `box.glsoft.ai`, `box.aiurl.tw`），支援 AI 圖片/影片/檔案自動 CDN 存儲與 Podcast 訂閱
+- 整合 OpenAI GPT-4o 聊天機器人（具備 Tool Calling 擴充工具）
 - 整合 Google Gemini 2.5 Flash AI 視覺功能
   - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
   - ✏️ **圖片編輯**：基於現有圖片進行 AI 編輯
-  - 🎨 **文字生成圖片**：從文字描述生成全新圖片（對話式互動）
+  - 🎨 **文字生成圖片**：從文字描述生成全新圖片（自動上傳 888box CloudFront CDN）
 - 🎤 **語音辨識 (ASR)**：支援 Groq Whisper 和 Gemini ASR，自動轉錄語音並用 GPT 回應
 - 🛠️ **線上工具集**：整合 tool.david888.com 實用工具網站
 - 解答之書占卜服務（精美 Flex Message 呈現）
@@ -62,15 +64,57 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 淺草籤占卜（精美 Flex Message 呈現）
 - 奇門遁甲占卜（精美 Flex Message 呈現）
 - 台灣氣象署天氣特報
-- 台灣法律諮詢（整合台灣法律 LLM）
+- ⚖️ **台灣法律諮詢**：整合台灣法律專業 LLM，長篇法律意見書自動發布至 Wiki
 - 📍 **周邊設施查詢**：傳送位置資訊，查找附近加油站、超商、餐廳、咖啡廳、停車場、ATM 等設施
 - 🍲 **大同電鍋食譜助手**：使用 RAG 技術提供大同電鍋食譜查詢（支援繁體中文語義搜尋）
+- 🚀 **自動化 CI/CD & Watchtower 部署**：GitHub Actions 自動建置 Multi-Arch 映像檔，伺服器 60 秒內自動無縫熱更新
 - 支援群組聊天（需要 @ 機器人）
 
-- 通過環境變數配置 API 金鑰
-- 支援 Docker 容器化
+---
 
-### 🎤 語音辨識功能 (NEW!)
+### 📖 David888 Wiki：LLM 自主長文發布與 3 合 1 閱讀體驗 (CORE FEATURE)
+
+> [!IMPORTANT]
+> **Wiki 的核心設計初衷是給「AI Agent / LLM」使用，而非繁瑣的人類手動輸入！**
+> 在 LINE 狹窄的聊天視窗中閱讀數千字長文極不舒適且容易被字數限制截斷。因此，當使用者向 Bot 交代**「深入分析」、「研究報告」、「完整教學」、「多步驟方案」、「企劃書」、「架構設計」、「市場調研」**等複雜任務時，LLM 會自動撰寫結構優美的完整 Markdown 文章發布到 David888 Wiki，並在 LINE 回傳高質感的精華摘要卡片與專屬閱讀連結！
+
+#### 🌟 核心特色：
+1. **LLM Tool Calling (`publish_to_wiki`)**：LLM 能在回答過程中主動判定是否需要發布至 Wiki，並生成包含 `[TOC]` 目錄、Mermaid 流程圖、比較表格、代碼區塊與註腳的專業文章。
+2. **智慧長文自動攔截 (Smart Auto-Publisher)**：若模型產出超過 600 字且含 Markdown 章節結構的深度分析，系統將自動攔截並發布至 Wiki，避免 LINE 訊息過長被分段或截斷。
+3. **3 合 1 專屬閱讀模式**：
+   - 🌐 **Web Reader**：公開唯讀頁面 (`https://wiki.david888.com/share/<id>`)，支援 20+ 款主題（如 `claude-canvas`, `tokyo-night`, `retro`）與字型自訂。
+   - 📑 **2D Slide Deck 簡報模式**：網址後加上 `/present`，自動將文章轉為 Reveal.js 2D 簡報矩陣。
+   - 📚 **eBook 電子書模式**：網址後加上 `/book`，提供雙欄目錄索引與左右拖曳閱讀。
+
+#### 💡 使用範例：
+- **使用者輸入**：`「幫我深入分析 2026 年邊緣運算與 Agent 架構的技術趨勢，並給出完整評估」`
+- **Bot 回應**：
+  - 發布完整文章至 David888 Wiki
+  - LINE 收到精美 Flex 卡片：
+    - 📖 **標題**：2026 邊緣運算與 Agent 架構深度評估
+    - 📝 **執行摘要**：本文剖析了分散式邊緣 Workers、D1 混合儲存與 MCP 工具端點的整合實踐...
+    - 🔘 `[ 🌐 閱讀 Wiki 完整文章 ]`
+    - 🔘 `[ 📑 2D 簡報模式 ]` | `[ 📚 電子書模式 ]`
+
+---
+
+### 📦 888box 多端點雲端資產管理 (NEW!)
+
+整合 `box.david888.com` 雲端多媒體儲存中心，支援三端點高可用容錯路由（Primary: `box.david888.com`，Fallback: `box.glsoft.ai`, `box.aiurl.tw`）：
+
+1. **AI 圖片自動 CDN 儲存**：Gemini 生成與編輯之圖片，自動儲存至 888box 並轉為 WebP 格式，透過 AWS CloudFront CDN 高速分發。
+2. **LINE 多媒體自動轉存**：
+   - **🎬 傳送影片**：自動上傳 888box，回傳播放與分享卡片。
+   - **📄 傳送檔案**：PDF、Word、壓縮檔自動備份至雲端。
+   - **📸 傳送圖片**：選單新增「☁️ 存入 888box」按鈕。
+3. **遠端轉存與 Podcast RSS**：
+   - `!box <url>` / `!轉存 <url>` / `!下載 <url>`：轉存遠端檔案。
+   - `!box podcast`：取得影片/音訊自動生成的 Podcast RSS 訂閱連結。
+   - `!box stats` / `!box`：查看雲端空間資產統計。
+
+---
+
+### 🎤 語音辨識功能 (ASR)
 
 讓 AI 幫你「聽懂語音」，自動轉錄並智能回應。
 
@@ -93,7 +137,7 @@ Bot: 🎤 您說：「講個笑話」
      從前從前有一隻程式設計師...
 ```
 
-### 🛠️ 線上工具集 (NEW!)
+### 🛠️ 線上工具集
 
 快速存取實用的開發者工具。
 
@@ -344,7 +388,15 @@ GEMINI_VISION_MODEL=gemini-2.5-flash                 # 用於圖片分析（看�
 ENABLE_IMAGE_ANALYSIS=true
 ENABLE_IMAGE_EDITING=true
 
-# Google Cloud Storage 設定（可選，用於圖片存儲）
+# 888box 資產管理與雲端存儲 (支援多端點高可用容錯)
+BOX_BASE_URL=https://box.david888.com
+BOX_FALLBACK_URLS=https://box.david888.com,https://box.glsoft.ai,https://box.aiurl.tw
+BOX_API_TOKEN=
+
+# David888 Wiki 知識庫設定
+WIKI_BASE_URL=https://wiki.david888.com
+
+# Google Cloud Storage 設定（可選備用）
 GOOGLE_CLOUD_PROJECT_ID=your_project_id
 GOOGLE_CLOUD_BUCKET_NAME=your_bucket_name
 

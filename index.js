@@ -2853,73 +2853,192 @@ ${context}`;
             legalAnswer = JSON.stringify(legalResponse.data)
           }
 
-          // LINE 訊息長度限制，如果超過 4500 字元就截斷
-          if (legalAnswer.length > 4500) {
-            legalAnswer = legalAnswer.substring(0, 4400) + '\n\n...(回應內容過長，已截取部分內容)'
-          }
-
-          const legalText = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`
-
-          // 如果回應還是太長，分段發送
-          if (legalText.length > 4500) {
-            const part1 = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer.substring(0, 3500)}`
-            const part2 = `${legalAnswer.substring(3500)}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`
-
-            const message1 = { type: 'text', text: part1 }
-            const message2 = { type: 'text', text: part2 }
-
-            await client.pushMessage(userId, [message1])
-            await client.pushMessage(userId, [message2])
+          // 處理法律分析回應：若長度超過 500 字元，自動發布至 David888 Wiki 並以 Flex 卡片呈現
+          if (legalAnswer.length > 500) {
+            try {
+              const slug = `legal-${Date.now()}`;
+              const fullMarkdown = `# ⚖️ 台灣法律專業分析意見書\n\n> **諮詢問題**：${userInput}\n\n[TOC]\n\n## 📖 專業法律分析\n\n${legalAnswer}\n\n---\n\n> ⚠️ **免責聲明**：本分析內容係由 AI 輔助生成，僅供法律常識與初步分析參考，不構成正式法律意見或委任關係。具體個案請諮詢合格執業律師。`;
+              const publishRes = await wikiHelper.publishNote(slug, fullMarkdown, { theme: 'claude-canvas' });
+              const summary = legalAnswer.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
+              const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, `⚖️ 法律解答：${userInput.slice(0, 30)}`, summary);
+              await client.pushMessage(userId, [flexMsg]);
+            } catch (wikiErr) {
+              console.warn('法律解答發布 Wiki 失敗，退回純文字發送:', wikiErr);
+              const legalText = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer.substring(0, 4000)}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`;
+              await client.pushMessage(userId, [{ type: 'text', text: legalText }]);
+            }
           } else {
-            const echo = { type: 'text', text: legalText }
-            await client.pushMessage(userId, [echo])
+            const legalText = `⚖️ 台灣法律專業解答\n\n📋 問題：${userInput}\n\n📖 法律分析：\n${legalAnswer}\n\n⚠️ 免責聲明：本回應僅供參考，實際法律問題請諮詢專業律師。`;
+            const echo = { type: 'text', text: legalText };
+            await client.pushMessage(userId, [echo]);
           }
 
         } else {
-          const echo = { type: 'text', text: '❌ 抱歉，目前無法取得法律諮詢回應。請稍後再試。' }
-          await client.pushMessage(userId, [echo])
+          const echo = { type: 'text', text: '❌ 抱歉，目前無法取得法律諮詢回應。請稍後再試。' };
+          await client.pushMessage(userId, [echo]);
         }
 
       } catch (error) {
-        console.error('台灣法律 LLM API 錯誤:', error)
-        let errorMessage = '❌ 抱歉，法律諮詢服務目前無法使用。'
+        console.error('台灣法律 LLM API 錯誤:', error);
+        let errorMessage = '❌ 抱歉，法律諮詢服務目前無法使用。';
 
         if (error.response) {
-          console.error('API 回應錯誤:', error.response.status, error.response.data)
-          errorMessage += `\n錯誤代碼：${error.response.status}`
+          console.error('API 回應錯誤:', error.response.status, error.response.data);
+          errorMessage += `\n錯誤代碼：${error.response.status}`;
         }
 
-        const echo = { type: 'text', text: errorMessage }
-        await client.pushMessage(userId, [echo])
+        const echo = { type: 'text', text: errorMessage };
+        await client.pushMessage(userId, [echo]);
       }
 
-      return Promise.resolve(null)
+      return Promise.resolve(null);
     }
 
-    // 顯示 Loading Indicator (最長 20 秒)
-    await showLoadingAnimation(userId, 20);
+    // 顯示 Loading Indicator (最長 30 秒)
+    await showLoadingAnimation(userId, 30);
+
+    const systemPrompt = `你是一個專業、智慧且友善的 AI 助手。回覆一律使用繁體中文。
+
+【自主發布 Wiki 原則】：
+- 對於簡短問答、日常問候、簡要查詢，請直接給出清晰簡練的繁體中文回覆。
+- 當使用者提出需要「深入分析」、「研究報告」、「完整教學」、「多步驟方案」、「企劃案」、「架構設計」、「長篇整理」或問題需要多章節、含程式碼、表格、流程圖的詳盡回答時：
+  1. 請務必呼叫 \`publish_to_wiki\` 工具，將完整、格式精美的 Markdown 文章（可善用 [TOC] 目錄、Mermaid 流程圖、比較表格、程式碼區塊、深入段落）發布到 David888 Wiki。
+  2. 同時在工具中提供精闢的重點摘要 (summary)。
+  3. 系統將為使用者自動生成精美的 LINE Flex 卡片，附帶完整文章閱讀連結、2D 簡報模式 (Slides) 與電子書模式 (Book)！
+- 當使用者需要轉存遠端多媒體或檔案時，可呼叫 \`save_asset_to_888box\` 工具。`;
 
     const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userInput },
+    ];
+
+    const tools = [
       {
-        role: 'system',
-        content: 'You are a helpful assistant. 回覆請用繁體中文語言為主',
+        type: 'function',
+        function: {
+          name: 'publish_to_wiki',
+          description: '當需要提供長篇、深入分析、研究報告、企劃案、多章節教程、架構設計或詳細說明時，呼叫此工具將完整 Markdown 文章發布到 David888 Wiki，並回傳專屬分享連結與摘要。',
+          parameters: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description: '文章完整標題'
+              },
+              path_slug: {
+                type: 'string',
+                description: '簡潔的英數 slug 路徑 (如 ai-market-report-2026)，留空則自動生成'
+              },
+              markdown_content: {
+                type: 'string',
+                description: '完整的 Markdown 格式文章內容，包含 [TOC] 目錄、標題結構、表格、Mermaid 流程圖、程式碼區塊等豐富排版'
+              },
+              summary: {
+                type: 'string',
+                description: '提供給使用者的核心重點摘要 (約 100-250 字)'
+              },
+              theme: {
+                type: 'string',
+                enum: ['claude-canvas', 'retro', 'tokyo-night', 'notion-clean', 'botanical', 'terminal'],
+                description: '文章排版風格主題，預設 claude-canvas'
+              }
+            },
+            required: ['title', 'markdown_content', 'summary']
+          }
+        }
       },
       {
-        role: 'user',
-        content: userInput,
-      },
-    ]
+        type: 'function',
+        function: {
+          name: 'save_asset_to_888box',
+          description: '將遠端的影片、音訊、圖片或檔案轉存至 888box 雲端空間與 CDN',
+          parameters: {
+            type: 'object',
+            properties: {
+              url: {
+                type: 'string',
+                description: '要下載並轉存的遠端檔案或多媒體 URL'
+              },
+              title: {
+                type: 'string',
+                description: '資產標題或描述'
+              }
+            },
+            required: ['url']
+          }
+        }
+      }
+    ];
 
     const completion = await openai.chat.completions.create({
-      model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini', // 默認使用 'gpt-4o-mini'，如果 .env 中未指定
-      temperature: 1,
+      model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
+      temperature: 0.7,
       messages: messages,
-      max_tokens: 1000,
-    })
+      tools: tools,
+      tool_choice: 'auto',
+      max_tokens: 4000,
+    });
 
-    const echo = { type: 'text', text: completion.choices[0].message.content || '抱歉，我沒有話可說了。' }
+    const choice = completion.choices[0];
 
-    return client.replyMessage(event.replyToken, [echo])
+    // 1. 處理 LLM 主動呼叫 Tool 的情況
+    if (choice.message && choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+      for (const toolCall of choice.message.tool_calls) {
+        if (toolCall.function.name === 'publish_to_wiki') {
+          try {
+            const args = JSON.parse(toolCall.function.arguments || '{}');
+            const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
+            const publishRes = await wikiHelper.publishNote(slug, args.markdown_content, {
+              theme: args.theme || 'claude-canvas'
+            });
+            const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, args.summary);
+            return client.replyMessage(event.replyToken, [flexMsg]);
+          } catch (wikiErr) {
+            console.error('Tool 呼叫發布 Wiki 失敗:', wikiErr);
+          }
+        } else if (toolCall.function.name === 'save_asset_to_888box') {
+          try {
+            const args = JSON.parse(toolCall.function.arguments || '{}');
+            const result = await boxHelper.uploadFromUrl(args.url, { title: args.title || '雲端資產' });
+            const flexMsg = boxHelper.formatAssetFlexMessage(result);
+            return client.replyMessage(event.replyToken, [flexMsg]);
+          } catch (boxErr) {
+            console.error('Tool 呼叫 888box 轉存失敗:', boxErr);
+          }
+        }
+      }
+    }
+
+    const rawContent = choice.message?.content || '';
+
+    // 2. 智慧防呆：若 LLM 未主動觸發 tool 但生成了長篇結構化 Markdown 分析（> 600 字元且有標題/代碼）
+    const hasMarkdownStructure = rawContent.includes('## ') || rawContent.includes('### ') || rawContent.includes('```');
+    if (rawContent.length > 600 && hasMarkdownStructure) {
+      console.log('⚡ 偵測到長篇 Markdown 分析內容，自動為用戶發布至 David888 Wiki...');
+      const lines = rawContent.split('\n');
+      let title = '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#')) {
+          title = trimmed.replace(/^#+\s*/, '');
+          break;
+        }
+      }
+      if (!title) title = userInput.slice(0, 30);
+      const slug = `analysis-${Date.now()}`;
+      try {
+        const publishRes = await wikiHelper.publishNote(slug, rawContent, { theme: 'claude-canvas' });
+        const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
+        const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
+        return client.replyMessage(event.replyToken, [flexMsg]);
+      } catch (wikiErr) {
+        console.warn('自動發布 Wiki 失敗，降級為純文字發送:', wikiErr);
+      }
+    }
+
+    // 3. 一般短篇問答直接回覆文字
+    const echo = { type: 'text', text: rawContent || '抱歉，我沒有話可說了。' };
+    return client.replyMessage(event.replyToken, [echo]);
   } catch (err) {
     console.log(err)
   }
