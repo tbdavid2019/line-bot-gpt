@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-08-27
+
+### 🔄 Changed & Multi-Endpoint High Availability Architecture
+- **Multi-Endpoint LLM Engine with Automatic Failover**:
+  - **Primary**: `https://nen.com.tw/v1` (`gpt-5.6-luna`), delivering ultra-fast responses and advanced reasoning.
+  - **Fallback**: `https://api.groq.com/openai/v1` (`openai/gpt-oss-20b`), ensuring 100% service uptime during network or upstream disruptions.
+  - Transparent failover helper `createChatCompletion()` applied across main conversation, audio transcription, and recipe RAG.
+- **Multi-Endpoint AI Image Generation & Editing Engine**:
+  - **Primary**: `https://nen.com.tw/v1` (`gemini-3.1-flash-image`), supporting direct multi-modal image generation and image-to-image editing.
+  - **Fallback**: Google Official REST API (`gemini-3.1-flash-image`), automatic failover buffer extraction.
+  - Automatic asset ingestion and distribution via 888box CloudFront CDN.
+- **Vision Analysis**:
+  - Upgraded to `gpt-5.6-luna` Vision (`nen.com.tw`) with fallback to Google REST API (`gemini-2.5-flash`).
+
+---
+
 ## [1.3.1] - 2026-08-27
 
 ### 🛡️ Security & Robustness

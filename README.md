@@ -369,24 +369,39 @@ Bot: ✨ 即將為您生成圖片...
 In the `.env` file, you need to configure the following environment variables:
 
 ```bash
+# ==============================================================================
+# LLM 核心設定 (主要: nen.com.tw gpt-5.6-luna / 備用: Groq openai/gpt-oss-20b)
+# ==============================================================================
+OPEN_AI_BASE_PATH=https://nen.com.tw/v1
+OPEN_AI_MODEL=gpt-5.6-luna
+OPEN_AI_LINE_SECRET=your_openai_or_nen_api_key
+
+# 備用 LLM 設定 (Groq)
+FALLBACK_LLM_BASE_PATH=https://api.groq.com/openai/v1
+FALLBACK_LLM_MODEL=openai/gpt-oss-20b
+FALLBACK_LLM_KEY=your_groq_api_key
+
+# ==============================================================================
+# AI 圖片生成與編輯設定 (主要: nen.com.tw / 備用: Google Gemini API)
+# ==============================================================================
+IMAGE_API_BASE_PATH=https://nen.com.tw/v1
+GEMINI_MODEL=gemini-3.1-flash-image
+IMAGE_API_KEY=your_image_api_key
+
+# 備用圖片模型與視覺設定 (Google REST API)
+GEMINI_API_KEY=your_gemini_api_key
+FALLBACK_IMAGE_API_KEY=your_gemini_api_key
+FALLBACK_GEMINI_MODEL=gemini-3.1-flash-image
+GEMINI_VISION_MODEL=gpt-5.6-luna
+
+# 圖片功能開關
+ENABLE_IMAGE_ANALYSIS=true
+ENABLE_IMAGE_EDITING=true
+
 # LINE Bot 設定
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_CHANNEL_SECRET=your_line_channel_secret
 LINE_BOT_USER_ID=your_line_bot_user_id
-
-# OpenAI 設定
-OPEN_AI_LINE_SECRET=your_openai_api_key
-OPEN_AI_MODEL=gpt-4o-mini
-OPEN_AI_BASE_PATH=https://api.openai.com/v1
-
-# Gemini AI 設定
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash-image-preview          # 用於圖片生成/編輯
-GEMINI_VISION_MODEL=gemini-2.5-flash                 # 用於圖片分析（看圖說話）
-
-# 圖片功能開關（可選）
-ENABLE_IMAGE_ANALYSIS=true
-ENABLE_IMAGE_EDITING=true
 
 # 888box 資產管理與雲端存儲 (支援多端點高可用容錯)
 BOX_BASE_URL=https://box.david888.com
@@ -399,30 +414,19 @@ WIKI_BASE_URL=https://wiki.david888.com
 # Google Cloud Storage 設定（可選備用）
 GOOGLE_CLOUD_PROJECT_ID=your_project_id
 GOOGLE_CLOUD_BUCKET_NAME=your_bucket_name
+GOOGLE_CLOUD_KEY_FILE=service-account-key.json
 
 # Google Maps API（用於周邊設施查詢）
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 
 # ASR (語音辨識) API Keys
-ASR_API_GROQ_KEY=your_groq_whisper_api_key  # Groq Whisper (推薦，免費額度)
-ASR_API_GEMINI_KEY=  # Optional: 留空則使用 GEMINI_API_KEY
-ASR_API_OPENAI_KEY=  # Optional: 留空則使用 OPEN_AI_LINE_SECRET
+ASR_API_GROQ_KEY=your_groq_whisper_api_key  # Groq Whisper
+ASR_API_GEMINI_KEY=
+ASR_API_OPENAI_KEY=
 
 # Python RAG 服務設定（大同食譜功能）
 PYTHON_PATH=./venv/bin/python
 RAG_SCRIPT_PATH=rag_service.py
-
-# 注意：大同食譜 RAG 功能使用 OPEN_AI_LINE_SECRET 來生成 embedding
-# 確保 OPEN_AI_LINE_SECRET 已設定，否則食譜搜尋功能無法運作
-```
-
-**重要說明：**
-- `OPEN_AI_LINE_SECRET` 同時用於：GPT 對話、圖片生成、大同食譜 RAG embedding
-- `GEMINI_API_KEY` 用於：圖片分析（視覺功能）、圖片生成
-- `GOOGLE_MAPS_API_KEY` 用於：周邊設施查詢功能
-- `ASR_API_GROQ_KEY` 用於：語音辨識（Groq Whisper，免費）
-- Bot 會自動選擇可用的 ASR 服務（Groq → Gemini → OpenAI）
-GOOGLE_CLOUD_KEY_FILE=path/to/service-account-key.json
 
 # 伺服器設定
 PORT=8111

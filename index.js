@@ -35,16 +35,49 @@ function getFileExtensionFromMimeType(mimeType) {
   return mimeToExt[mimeType] || 'jpg';
 }
 
-// 初始化 OpenAI 客戶端
-const openai = new OpenAI({
+// 初始化主要 LLM 客戶端 (Primary: nen.com.tw / gpt-5.6-luna)
+const primaryLlmClient = new OpenAI({
   apiKey: process.env.OPEN_AI_LINE_SECRET,
-  baseURL: process.env.OPEN_AI_BASE_PATH || 'https://api.openai.com/v1', // 默認的 OpenAI API endpoint
+  baseURL: process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'
 });
 
-// 初始化 Google GenAI 客戶端
-const genAI = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
+// 初始化備用 LLM 客戶端 (Fallback: Groq / openai/gpt-oss-20b)
+const fallbackLlmClient = new OpenAI({
+  apiKey: process.env.FALLBACK_LLM_KEY,
+  baseURL: process.env.FALLBACK_LLM_BASE_PATH || 'https://api.groq.com/openai/v1'
 });
+
+// 相容舊有 openai 參考
+const openai = primaryLlmClient;
+
+// 統一 LLM Chat Completion 呼叫函數（具備自動 Failover）
+async function createChatCompletion(params) {
+  // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna)
+  try {
+    const primaryModel = process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
+    const completion = await primaryLlmClient.chat.completions.create({
+      ...params,
+      model: primaryModel
+    });
+    return completion;
+  } catch (primaryErr) {
+    console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至備用端點...`);
+  }
+
+  // 2. 切換至備用端點 (Groq / openai/gpt-oss-20b)
+  try {
+    const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b';
+    console.log(`🤖 使用備用 LLM 端點 (${fallbackModel} @ Groq)...`);
+    const completion = await fallbackLlmClient.chat.completions.create({
+      ...params,
+      model: fallbackModel
+    });
+    return completion;
+  } catch (fallbackErr) {
+    console.error(`❌ 備用 LLM 呼叫失敗: ${fallbackErr.message}`);
+    throw fallbackErr;
+  }
+}
 
 // 初始化 Google Cloud Storage 客戶端
 let storage = null;
@@ -267,124 +300,326 @@ function detectImageIntent(text) {
 }
 
 
-// 圖片分析功能（使用 Gemini Vision，純文字輸出）
-async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
-  try {
-    const model = process.env.GEMINI_VISION_MODEL || 'gemini-flash-latest';
-    const userPrompt = prompt || '請詳細描述這張圖片的內容，包括主要物體、場景、顏色、氛圍等';
+// 輔助函數：從 Markdown 或 Base64 提取圖片 Buffer
+function extractImageBufferFromResponse(content) {
+  if (!content || typeof content !== 'string') return null;
 
-    console.log(`🔍 使用 ${model} 分析圖片...`);
-
-    const response = await genAI.models.generateContent({
-      model: model,
-      contents: [{
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              data: imageBuffer.toString('base64'),
-              mimeType: 'image/jpeg'
-            }
-          },
-          { text: userPrompt }
-        ]
-      }]
-    });
-
-    const analysisText = response.response.text();
-    console.log('✅ 圖片分析完成');
-    return analysisText;
-
-  } catch (error) {
-    console.error('❌ 圖片分析錯誤:', error);
-    throw error;
+  // 1. 匹配 Markdown 格式: ![image](data:image/png;base64,...)
+  const mdMatch = content.match(/!\[.*?\]\(data:(image\/[a-zA-Z0-9.+_-]+);base64,([A-Za-z0-9+/=]+)\)/);
+  if (mdMatch) {
+    return {
+      mimeType: mdMatch[1],
+      buffer: Buffer.from(mdMatch[2], 'base64')
+    };
   }
+
+  // 2. 匹配 data:image/png;base64,...
+  const dataMatch = content.match(/data:(image\/[a-zA-Z0-9.+_-]+);base64,([A-Za-z0-9+/=]+)/);
+  if (dataMatch) {
+    return {
+      mimeType: dataMatch[1],
+      buffer: Buffer.from(dataMatch[2], 'base64')
+    };
+  }
+
+  // 3. 純 Base64 字串
+  if (content.length > 500 && /^[A-Za-z0-9+/=\s]+$/.test(content.trim())) {
+    return {
+      mimeType: 'image/png',
+      buffer: Buffer.from(content.trim(), 'base64')
+    };
+  }
+
+  return null;
 }
 
-// 圖片編輯功能（使用 Gemini Image，圖片輸出）
-async function editImageWithGemini(imageBuffer, editPrompt, userId) {
+// 核心多端點 AI 圖片生成 (Primary: nen.com.tw / gemini-3.1-flash-image -> Fallback: Google REST API)
+async function generateImageBufferWithAi(prompt) {
+  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-image';
+
+  // 1. 優先嘗試 Primary (nen.com.tw)
   try {
-    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
-    const config = {
-      responseModalities: ['IMAGE', 'TEXT'],
-    };
-
-    console.log(`✏️ 使用 ${model} 編輯圖片...`);
-    console.log(`編輯指令: ${editPrompt}`);
-
-    const contents = [{
-      role: 'user',
-      parts: [
-        {
-          inlineData: {
-            data: imageBuffer.toString('base64'),
-            mimeType: 'image/jpeg'
-          }
-        },
-        { text: `Edit this image: ${editPrompt}. Keep the main subject but ${editPrompt}` }
-      ]
-    }];
-
-    const response = await genAI.models.generateContentStream({
-      model,
-      config,
-      contents,
+    console.log(`🎨 嘗試主要圖片生成端點 (${primaryModel} @ ${primaryUrl})...`);
+    const res = await fetch(primaryUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${primaryKey}`
+      },
+      body: JSON.stringify({
+        model: primaryModel,
+        messages: [{ role: 'user', content: `Generate an image: ${prompt}` }],
+        modalities: ['image', 'text']
+      }),
+      signal: AbortSignal.timeout(60000)
     });
 
-    let imageGenerated = false;
-    let textResponse = '';
-
-    for await (const chunk of response) {
-      // 檢查用戶是否已取消
-      const currentState = userStates.get(userId);
-      if (!currentState || currentState.state !== 'editing_image') {
-        console.log('圖片編輯已被用戶取消');
-        return { success: false, cancelled: true };
+    if (res.ok) {
+      const json = await res.json();
+      const content = json.choices?.[0]?.message?.content || '';
+      const extracted = extractImageBufferFromResponse(content);
+      if (extracted && extracted.buffer.length > 1000) {
+        console.log(`✅ 主要端點圖片生成成功，大小: ${extracted.buffer.length} bytes`);
+        return extracted;
       }
+    } else {
+      console.warn(`⚠️ 主要端點圖片生成失敗 HTTP ${res.status}`);
+    }
+  } catch (primaryErr) {
+    console.warn(`⚠️ 主要端點圖片生成錯誤: ${primaryErr.message}，切換備用端點...`);
+  }
 
-      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
-        continue;
-      }
+  // 2. 備用 Fallback (Google REST API gemini-3.1-flash-image)
+  const fallbackKey = process.env.FALLBACK_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
+  const fallbackModel = process.env.FALLBACK_GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${fallbackKey}`;
 
-      // 處理圖片數據
-      if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
-        const inlineData = chunk.candidates[0].content.parts[0].inlineData;
-        const buffer = Buffer.from(inlineData.data || '', 'base64');
+  try {
+    console.log(`🎨 嘗試備用圖片生成端點 (${fallbackModel} @ Google REST API)...`);
+    const res = await fetch(fallbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+        generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
 
-        // 統一上傳圖片到 888box / GCS / 本地
-        const uploadResult = await uploadImageAsset(buffer, inlineData.mimeType, `edited_${editPrompt}`);
-
-        if (uploadResult.url) {
-          console.log(`✅ 圖片編輯完成並上傳 (${uploadResult.storageType})`);
+    if (res.ok) {
+      const json = await res.json();
+      const parts = json.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const buffer = Buffer.from(part.inlineData.data, 'base64');
+          console.log(`✅ 備用端點圖片生成成功，大小: ${buffer.length} bytes`);
           return {
-            success: true,
-            imageUrl: uploadResult.url,
-            shareUrl: uploadResult.shareUrl,
-            buffer: buffer,
-            mimeType: inlineData.mimeType
-          };
-        } else {
-          return {
-            success: true,
-            localPath: uploadResult.localPath,
-            buffer: buffer,
-            mimeType: inlineData.mimeType
+            mimeType: part.inlineData.mimeType || 'image/jpeg',
+            buffer: buffer
           };
         }
       }
-      // 處理文字回應
-      else if (chunk.text) {
-        textResponse += chunk.text;
+    }
+    const errText = await res.text();
+    throw new Error(`Fallback HTTP ${res.status}: ${errText.substring(0, 200)}`);
+  } catch (fallbackErr) {
+    console.error(`❌ 備用端點圖片生成失敗: ${fallbackErr.message}`);
+    throw fallbackErr;
+  }
+}
+
+// 核心多端點 AI 圖片編輯
+async function editImageBufferWithAi(imageBuffer, editPrompt) {
+  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const base64Img = imageBuffer.toString('base64');
+
+  // 1. 優先嘗試 Primary (nen.com.tw)
+  try {
+    console.log(`✏️ 嘗試主要圖片編輯端點 (${primaryModel} @ ${primaryUrl})...`);
+    const res = await fetch(primaryUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${primaryKey}`
+      },
+      body: JSON.stringify({
+        model: primaryModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Edit this image: ${editPrompt}. Keep the main subject but ${editPrompt}` },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Img}` } }
+            ]
+          }
+        ],
+        modalities: ['image', 'text']
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const content = json.choices?.[0]?.message?.content || '';
+      const extracted = extractImageBufferFromResponse(content);
+      if (extracted && extracted.buffer.length > 1000) {
+        console.log(`✅ 主要端點圖片編輯成功，大小: ${extracted.buffer.length} bytes`);
+        return extracted;
       }
     }
+  } catch (primaryErr) {
+    console.warn(`⚠️ 主要端點圖片編輯錯誤: ${primaryErr.message}，切換備用端點...`);
+  }
 
-    // 如果沒有生成圖片
-    if (!imageGenerated && textResponse) {
-      return { success: false, error: 'No image generated', textResponse };
+  // 2. 備用 Fallback (Google REST API gemini-3.1-flash-image)
+  const fallbackKey = process.env.FALLBACK_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
+  const fallbackModel = process.env.FALLBACK_GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${fallbackKey}`;
+
+  try {
+    console.log(`✏️ 嘗試備用圖片編輯端點 (${fallbackModel} @ Google REST API)...`);
+    const res = await fetch(fallbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  data: base64Img,
+                  mimeType: 'image/jpeg'
+                }
+              },
+              { text: `Edit this image: ${editPrompt}. Keep the main subject but ${editPrompt}` }
+            ]
+          }
+        ],
+        generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const parts = json.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const buffer = Buffer.from(part.inlineData.data, 'base64');
+          return {
+            mimeType: part.inlineData.mimeType || 'image/jpeg',
+            buffer: buffer
+          };
+        }
+      }
+    }
+    const errText = await res.text();
+    throw new Error(`Fallback HTTP ${res.status}: ${errText.substring(0, 200)}`);
+  } catch (fallbackErr) {
+    console.error(`❌ 備用端點圖片編輯失敗: ${fallbackErr.message}`);
+    throw fallbackErr;
+  }
+}
+
+// 核心多端點 AI 圖片視覺分析 (Vision)
+async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
+  const base64Img = imageBuffer.toString('base64');
+  const userPrompt = prompt || '請詳細描述這張圖片的內容，包括主要物體、場景、顏色、氛圍等';
+
+  // 1. 優先嘗試 Primary Vision (gpt-5.6-luna @ nen.com.tw)
+  const primaryUrl = `${process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  const primaryKey = process.env.OPEN_AI_LINE_SECRET;
+  const primaryModel = process.env.GEMINI_VISION_MODEL || process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
+
+  try {
+    console.log(`🔍 嘗試主要 Vision 分析 (${primaryModel} @ ${primaryUrl})...`);
+    const res = await fetch(primaryUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${primaryKey}`
+      },
+      body: JSON.stringify({
+        model: primaryModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: userPrompt },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Img}` } }
+            ]
+          }
+        ]
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const text = json.choices?.[0]?.message?.content;
+      if (text) {
+        console.log('✅ 主要 Vision 分析完成');
+        return text;
+      }
+    }
+  } catch (primaryErr) {
+    console.warn(`⚠️ 主要 Vision 分析錯誤: ${primaryErr.message}，切換備用端點...`);
+  }
+
+  // 2. 備用 Fallback (Google REST API gemini-2.5-flash)
+  const fallbackKey = process.env.FALLBACK_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
+  const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${fallbackKey}`;
+
+  try {
+    console.log(`🔍 嘗試備用 Vision 分析 (gemini-2.5-flash @ Google REST API)...`);
+    const res = await fetch(fallbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  data: base64Img,
+                  mimeType: 'image/jpeg'
+                }
+              },
+              { text: userPrompt }
+            ]
+          }
+        ]
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        console.log('✅ 備用 Vision 分析完成');
+        return text;
+      }
+    }
+    const errText = await res.text();
+    throw new Error(`Fallback HTTP ${res.status}: ${errText.substring(0, 200)}`);
+  } catch (fallbackErr) {
+    console.error(`❌ 備用 Vision 分析失敗: ${fallbackErr.message}`);
+    throw fallbackErr;
+  }
+}
+
+// 圖片編輯功能（使用 AI Image，圖片輸出）
+async function editImageWithGemini(imageBuffer, editPrompt, userId) {
+  try {
+    console.log(`✏️ 正在編輯圖片: ${editPrompt}`);
+    const result = await editImageBufferWithAi(imageBuffer, editPrompt);
+    if (!result || !result.buffer) {
+      return { success: false, error: 'Image editing returned empty buffer' };
     }
 
-    return { success: false, error: 'Image generation failed' };
-
+    const uploadResult = await uploadImageAsset(result.buffer, result.mimeType || 'image/jpeg', `edited_${editPrompt}`);
+    if (uploadResult.url) {
+      return {
+        success: true,
+        imageUrl: uploadResult.url,
+        shareUrl: uploadResult.shareUrl,
+        buffer: result.buffer,
+        mimeType: result.mimeType
+      };
+    } else {
+      return {
+        success: true,
+        localPath: uploadResult.localPath,
+        buffer: result.buffer,
+        mimeType: result.mimeType
+      };
+    }
   } catch (error) {
     console.error('❌ 圖片編輯錯誤:', error);
     return { success: false, error: error.message };
@@ -394,165 +629,120 @@ async function editImageWithGemini(imageBuffer, editPrompt, userId) {
 // 圖片生成輔助函數（使用 Push Message）
 async function generateImageWithGeminiPush(prompt, source, userId) {
   try {
-    const config = {
-      responseModalities: ['IMAGE', 'TEXT'],
-    };
-    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: `Generate an image: ${prompt}`,
-          },
-        ],
-      },
-    ];
-
-    const response = await genAI.models.generateContentStream({
-      model,
-      config,
-      contents,
-    });
-
-    let imageGenerated = false;
-    let textResponse = '';
-
-    for await (const chunk of response) {
-      // 檢查用戶是否已取消
-      const currentState = userStates.get(userId);
-      if (!currentState || currentState.state !== 'generating_image') {
-        console.log('圖片生成已被用戶取消');
-        return; // 已被取消
-      }
-
-      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
-        continue;
-      }
-
-      // 處理圖片數據
-      if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
-        const inlineData = chunk.candidates[0].content.parts[0].inlineData;
-        const buffer = Buffer.from(inlineData.data || '', 'base64');
-
-        // 統一上傳圖片到 888box / GCS / 本地
-        const uploadResult = await uploadImageAsset(buffer, inlineData.mimeType, prompt);
-
-        if (uploadResult.url) {
-          const footerContents = [
-            {
-              type: 'button',
-              action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' },
-              style: 'primary',
-              color: '#1DB446',
-              height: 'sm'
-            }
-          ];
-
-          if (uploadResult.shareUrl) {
-            footerContents.push({
-              type: 'button',
-              action: { type: 'uri', label: '🌐 在 888box 檢視', uri: uploadResult.shareUrl },
-              style: 'secondary',
-              color: '#2F80ED',
-              height: 'sm'
-            });
-          }
-
-          footerContents.push({
-            type: 'button',
-            action: { type: 'message', label: '✖️ 退出', text: '取消' },
-            style: 'secondary',
-            color: '#AAAAAA',
-            height: 'sm'
-          });
-
-          const successFlexMessage = {
-            type: 'flex',
-            altText: '✅ 圖片生成成功',
-            contents: {
-              type: 'bubble',
-              hero: {
-                type: 'image',
-                url: uploadResult.url,
-                size: 'full',
-                aspectRatio: '1:1',
-                aspectMode: 'cover',
-                action: {
-                  type: 'uri',
-                  uri: uploadResult.shareUrl || uploadResult.url
-                }
-              },
-              header: {
-                type: 'box',
-                layout: 'vertical',
-                contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }],
-                backgroundColor: '#1DB446',
-                paddingAll: 'lg'
-              },
-              body: {
-                type: 'box',
-                layout: 'vertical',
-                contents: [
-                  { type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' },
-                  { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' },
-                  { type: 'separator', margin: 'md' },
-                  {
-                    type: 'box',
-                    layout: 'horizontal',
-                    margin: 'sm',
-                    contents: [
-                      { type: 'text', text: '儲存空間', size: 'xs', color: '#999999', flex: 3 },
-                      { type: 'text', text: uploadResult.storageType === '888box' ? '888box CloudFront CDN' : 'Google Cloud Storage', size: 'xs', color: '#666666', flex: 7 }
-                    ]
-                  }
-                ]
-              },
-              footer: {
-                type: 'box',
-                layout: 'vertical',
-                spacing: 'sm',
-                contents: footerContents
-              }
-            }
-          };
-
-          await client.pushMessage(userId, successFlexMessage);
-          imageGenerated = true;
-        } else if (uploadResult.localPath) {
-          const successFlexMessage = {
-            type: 'flex',
-            altText: '✅ 圖片生成成功',
-            contents: {
-              type: 'bubble',
-              header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
-              body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '📋 儲存位置', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '已保存至伺服器本地', size: 'sm', color: '#666666', margin: 'sm' }, { type: 'text', text: '⚠️ 圖片已保存在 images 資料夾', size: 'xs', color: '#999999', wrap: true, margin: 'sm' }] },
-              footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
-            }
-          };
-
-          await client.pushMessage(userId, [successFlexMessage]);
-          imageGenerated = true;
-        }
-      }
-      // 處理文字回應
-      else if (chunk.text) {
-        textResponse += chunk.text;
-      }
+    console.log(`🎨 正在為用戶 ${userId} 生成圖片: ${prompt}`);
+    const result = await generateImageBufferWithAi(prompt);
+    
+    // 檢查用戶是否已取消
+    const currentState = userStates.get(userId);
+    if (!currentState || currentState.state !== 'generating_image') {
+      console.log('圖片生成已被用戶取消');
+      return;
     }
 
-    // 如果沒有生成圖片但有文字回應，發送文字
-    if (!imageGenerated && textResponse) {
-      const textMessage = { type: 'text', text: `🤖 Gemini 回應：\n${textResponse}` };
-      await client.pushMessage(userId, [textMessage]);
-    } else if (!imageGenerated) {
+    if (!result || !result.buffer) {
       const errorMessage = { type: 'text', text: '❌ 抱歉，圖片生成失敗，請稍後再試。' };
-      await client.pushMessage(userId, [errorMessage]);
+      return client.pushMessage(userId, [errorMessage]);
     }
 
+    const uploadResult = await uploadImageAsset(result.buffer, result.mimeType || 'image/png', prompt);
+
+    if (uploadResult.url) {
+      const footerContents = [
+        {
+          type: 'button',
+          action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' },
+          style: 'primary',
+          color: '#1DB446',
+          height: 'sm'
+        }
+      ];
+
+      if (uploadResult.shareUrl) {
+        footerContents.push({
+          type: 'button',
+          action: { type: 'uri', label: '🌐 在 888box 檢視', uri: uploadResult.shareUrl },
+          style: 'secondary',
+          color: '#2F80ED',
+          height: 'sm'
+        });
+      }
+
+      footerContents.push({
+        type: 'button',
+        action: { type: 'message', label: '✖️ 退出', text: '取消' },
+        style: 'secondary',
+        color: '#AAAAAA',
+        height: 'sm'
+      });
+
+      const successFlexMessage = {
+        type: 'flex',
+        altText: '✅ 圖片生成成功',
+        contents: {
+          type: 'bubble',
+          hero: {
+            type: 'image',
+            url: uploadResult.url,
+            size: 'full',
+            aspectRatio: '1:1',
+            aspectMode: 'cover',
+            action: {
+              type: 'uri',
+              uri: uploadResult.shareUrl || uploadResult.url
+            }
+          },
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }],
+            backgroundColor: '#1DB446',
+            paddingAll: 'lg'
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              { type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' },
+              { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' },
+              { type: 'separator', margin: 'md' },
+              {
+                type: 'box',
+                layout: 'horizontal',
+                margin: 'sm',
+                contents: [
+                  { type: 'text', text: '儲存空間', size: 'xs', color: '#999999', flex: 3 },
+                  { type: 'text', text: uploadResult.storageType === '888box' ? '888box CloudFront CDN' : 'Google Cloud Storage', size: 'xs', color: '#666666', flex: 7 }
+                ]
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: footerContents
+          }
+        }
+      };
+
+      await client.pushMessage(userId, successFlexMessage);
+    } else if (uploadResult.localPath) {
+      const successFlexMessage = {
+        type: 'flex',
+        altText: '✅ 圖片生成成功',
+        contents: {
+          type: 'bubble',
+          header: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✅ 圖片生成成功', weight: 'bold', size: 'xl', color: '#FFFFFF' }], backgroundColor: '#1DB446', paddingAll: 'lg' },
+          body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🎨 主題', weight: 'bold', size: 'sm', color: '#999999' }, { type: 'text', text: prompt, wrap: true, size: 'md', color: '#333333', margin: 'sm' }, { type: 'separator', margin: 'md' }, { type: 'text', text: '📋 儲存位置', weight: 'bold', size: 'sm', color: '#999999', margin: 'md' }, { type: 'text', text: '已保存至伺服器本地', size: 'sm', color: '#666666', margin: 'sm' }, { type: 'text', text: '⚠️ 圖片已保存在 images 資料夾', size: 'xs', color: '#999999', wrap: true, margin: 'sm' }] },
+          footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '🎨 再畫一張', text: '畫圖' }, style: 'primary', color: '#1DB446', height: 'sm' }, { type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
+        }
+      };
+
+      await client.pushMessage(userId, [successFlexMessage]);
+    }
   } catch (error) {
-    console.error('Gemini 圖片生成錯誤:', error);
-    const errorMessage = { type: 'text', text: '❌ 抱歉，圖片生成服務目前無法使用。請檢查 GEMINI_API_KEY 是否正確設定。' };
+    console.error('AI 圖片生成錯誤:', error);
+    const errorMessage = { type: 'text', text: `❌ 抱歉，圖片生成服務目前無法使用：${error.message}` };
     await client.pushMessage(userId, [errorMessage]);
   }
 }
@@ -1206,8 +1396,7 @@ async function handleEvent(event) {
           { role: 'user', content: transcription }
         ];
 
-        const completion = await openai.chat.completions.create({
-          model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
+        const completion = await createChatCompletion({
           messages: messages,
           tools: [
             {
@@ -1573,8 +1762,7 @@ ${context}`;
 
             console.log(`🤖 準備呼叫 GPT，query: "${query}"`);
 
-            const completion = await openai.chat.completions.create({
-              model: process.env.OPEN_AI_MODEL || 'gpt-4o',
+            const completion = await createChatCompletion({
               messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
@@ -3039,8 +3227,7 @@ ${context}`;
       }
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPEN_AI_MODEL || 'gpt-4o-mini',
+    const completion = await createChatCompletion({
       temperature: 0.7,
       messages: messages,
       tools: tools,
