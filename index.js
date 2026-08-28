@@ -1566,9 +1566,7 @@ async function handleEvent(event) {
               }
             } else if (fnName === 'search_web') {
               const sRes = await searchHelper.searchWeb(args.query);
-              const toolContent = sRes.success 
-                ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
-                : `搜尋失敗: ${sRes.error}`;
+              const toolContent = sRes.content || `查無關於 [${args.query}] 的特定記錄。若該商品、功能或型號尚未在台發售或不存在，請如實告知用戶，並提供最新款型號或替代方案。`;
               messages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -3753,9 +3751,7 @@ ${context}`;
           }
         } else if (fnName === 'search_web') {
           const sRes = await searchHelper.searchWeb(args.query);
-          const toolContent = sRes.success 
-            ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
-            : `搜尋失敗: ${sRes.error}`;
+          const toolContent = sRes.content || `查無關於 [${args.query}] 的特定記錄。若該商品、功能或型號尚未在台發售或不存在，請如實告知用戶，並提供最新款型號或替代方案。`;
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,

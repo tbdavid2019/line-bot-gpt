@@ -47,9 +47,37 @@ async function searchWeb(query, options = {}) {
     }
   }
 
+  // 若完整長句搜尋無結果且包含多個詞彙，自動降級為核心關鍵詞再次搜尋
+  const words = cleanQuery.split(/[\s,，]+/);
+  if (words.length > 3) {
+    const simplifiedQuery = words.slice(0, 3).join(' ');
+    for (const baseUrl of ENDPOINTS) {
+      try {
+        const url = `${baseUrl.replace(/\/+$/, '')}/s/${encodeURIComponent(simplifiedQuery)}`;
+        const res = await fetch(url, {
+          headers: { 'Accept': 'text/plain' },
+          signal: AbortSignal.timeout(2500)
+        });
+
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.trim().length > 0) {
+            return {
+              success: true,
+              endpoint: baseUrl,
+              query: simplifiedQuery,
+              content: text.trim().slice(0, 1500)
+            };
+          }
+        }
+      } catch (err) {}
+    }
+  }
+
   return {
     success: false,
     query: cleanQuery,
+    content: `即時搜尋查無關於「${cleanQuery}」的明確上線記錄。若該商品、功能或型號目前尚未在台發售或不存在，請明確如實向用戶說明，並提供目前最新款型號或替代方案的相關說明。`,
     error: lastError ? lastError.message : 'All search endpoints failed'
   };
 }
