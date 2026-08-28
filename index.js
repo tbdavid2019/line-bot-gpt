@@ -77,6 +77,9 @@ const fallbackLlmClient = fallbackKey ? new OpenAI({
 // 相容舊有 openai 參考
 const openai = primaryLlmClient || fallbackLlmClient;
 
+// 多輪 Agentic Tool Calling 最大循環上限 (預設 10 輪)
+const MAX_AGENT_TURNS = parseInt(process.env.MAX_AGENT_TURNS || '10', 10);
+
 // 統一 LLM Chat Completion 呼叫函數（具備自動 Failover）
 async function createChatCompletion(params) {
   // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna / deepseek-v4-flash)
@@ -1529,7 +1532,7 @@ async function handleEvent(event) {
         });
 
         let turnCount = 0;
-        while (turnCount < 2) {
+        while (turnCount < MAX_AGENT_TURNS) {
           const currentChoice = currentCompletion.choices[0];
           const toolCalls = currentChoice.message?.tool_calls;
 
@@ -3716,7 +3719,7 @@ ${context}`;
     });
 
     let turnCount = 0;
-    while (turnCount < 2) {
+    while (turnCount < MAX_AGENT_TURNS) {
       const currentChoice = currentCompletion.choices[0];
       const toolCalls = currentChoice.message?.tool_calls;
 
