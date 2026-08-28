@@ -1122,7 +1122,7 @@ async function handleEvent(event) {
         // 檢查狀態是否存在和過期（30 分鐘）
         const LOCATION_EXPIRE_TIME = 30 * 60 * 1000; // 30 分鐘
         if (!userState || userState.state !== 'waiting_place_type') {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '⚠️ 位置資訊已過期，請重新分享位置。'
           });
@@ -1131,7 +1131,7 @@ async function handleEvent(event) {
         // 檢查是否超過 30 分鐘
         if (Date.now() - userState.timestamp > LOCATION_EXPIRE_TIME) {
           userStates.delete(userId);
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '⚠️ 位置資訊已過期（超過30分鐘），請重新分享位置。'
           });
@@ -1156,7 +1156,7 @@ async function handleEvent(event) {
 
         if (places.length === 0) {
           // 不刪除狀態，讓用戶可以嘗試其他類型
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: `附近沒有找到${typeNames[placeType]} 😢\n\n💡 您可以再次分享位置並嘗試其他類型。`
           });
@@ -1173,7 +1173,7 @@ async function handleEvent(event) {
           text: '💡 您可以再次分享位置並選擇其他類型，或在30分鐘內位置資訊會保持有效。'
         };
 
-        return client.replyMessage(event.replyToken, [flexMessage, tipMessage]);
+        return safeReply(event, [flexMessage, tipMessage]);
       }
     }
 
@@ -1287,7 +1287,7 @@ async function handleEvent(event) {
         }
       };
 
-      return client.replyMessage(event.replyToken, [selectPlaceTypeMessage]);
+      return safeReply(event, [selectPlaceTypeMessage]);
     }
 
     // 處理圖片訊息
@@ -1337,7 +1337,7 @@ async function handleEvent(event) {
         }
       };
 
-      return client.replyMessage(event.replyToken, [selectMessage]);
+      return safeReply(event, [selectMessage]);
     }
 
     // 處理影片訊息
@@ -1351,7 +1351,7 @@ async function handleEvent(event) {
       try {
         const videoBuffer = await downloadMediaFromLine(messageId, '影片');
         if (!videoBuffer) {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '❌ 抱歉，無法下載影片檔案。'
           });
@@ -1363,10 +1363,10 @@ async function handleEvent(event) {
         });
 
         const flexMessage = boxHelper.formatAssetFlexMessage(result);
-        return client.replyMessage(event.replyToken, [flexMessage]);
+        return safeReply(event, [flexMessage]);
       } catch (error) {
         console.error('❌ 上傳影片至 888box 失敗:', error);
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: `❌ 影片儲存至 888box 失敗：${error.message}`
         });
@@ -1385,7 +1385,7 @@ async function handleEvent(event) {
       try {
         const fileBuffer = await downloadMediaFromLine(messageId, '檔案');
         if (!fileBuffer) {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '❌ 抱歉，無法下載檔案。'
           });
@@ -1396,10 +1396,10 @@ async function handleEvent(event) {
         });
 
         const flexMessage = boxHelper.formatAssetFlexMessage(result);
-        return client.replyMessage(event.replyToken, [flexMessage]);
+        return safeReply(event, [flexMessage]);
       } catch (error) {
         console.error('❌ 上傳檔案至 888box 失敗:', error);
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: `❌ 檔案儲存至 888box 失敗：${error.message}`
         });
@@ -1420,7 +1420,7 @@ async function handleEvent(event) {
         // 下載音訊
         const audioBuffer = await downloadAudioFromLine(messageId);
         if (!audioBuffer) {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '❌ 抱歉，無法下載音訊檔案。'
           });
@@ -1429,7 +1429,7 @@ async function handleEvent(event) {
         // 轉錄音訊
         const transcription = await transcribeAudio(audioBuffer);
         if (!transcription) {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '❌ 抱歉，無法辨識音訊內容。請確認 ASR 服務已正確設定。'
           });
@@ -1795,9 +1795,16 @@ async function handleEvent(event) {
     const userId = event.source.userId || event.source.groupId || event.source.roomId;
     let userState = userStates.get(userId);
 
+    // 狀態超時保護：如果用戶狀態停留超過 60 秒，自動清除防止狀態卡住
+    if (userState && ((userState.startTime && Date.now() - userState.startTime > 60000) || (!userState.startTime && userState.state !== 'tatung_recipe_mode'))) {
+      console.log(`🧹 用戶 [${userId}] 的狀態 [${userState.state}] 已過期，自動清除防止卡住...`);
+      userStates.delete(userId);
+      userState = null;
+    }
+
     // 進入大同食譜模式
     if (userInput === '大同食譜') {
-      userStates.set(userId, { state: 'tatung_recipe_mode' });
+      userStates.set(userId, { state: 'tatung_recipe_mode', startTime: Date.now() });
       const welcomeMessage = {
         type: 'flex',
         altText: '🍲 大同電鍋食譜小幫手',
@@ -1865,14 +1872,14 @@ async function handleEvent(event) {
           }
         }
       };
-      return client.replyMessage(event.replyToken, welcomeMessage);
+      return safeReply(event, welcomeMessage);
     }
 
     // 處理大同食譜模式下的輸入
     if (userState && userState.state === 'tatung_recipe_mode') {
       if (userInput === '退出') {
         userStates.delete(userId);
-        return client.replyMessage(event.replyToken, { type: 'text', text: '已退出食譜模式，回到一般聊天。' });
+        return safeReply(event, { type: 'text', text: '已退出食譜模式，回到一般聊天。' });
       }
 
       const query = userInput.trim();
@@ -1915,7 +1922,7 @@ async function handleEvent(event) {
             if (code !== 0) {
               console.error(`❌ Python 執行失敗，exit code: ${code}`);
               console.error(`❌ Error output: ${errorString}`);
-              await client.replyMessage(event.replyToken, {
+              await safeReply(event, {
                 type: 'text',
                 text: `查詢食譜時發生錯誤。\n\n錯誤詳情：\n${errorString.substring(0, 200)}`
               });
@@ -1924,7 +1931,7 @@ async function handleEvent(event) {
 
             if (!dataString.trim()) {
               console.error('❌ Python 沒有返回任何資料');
-              await client.replyMessage(event.replyToken, {
+              await safeReply(event, {
                 type: 'text',
                 text: '查詢食譜時沒有收到回應，請稍後再試。'
               });
@@ -1936,7 +1943,7 @@ async function handleEvent(event) {
 
             if (result.error) {
               console.error('RAG Error:', result.error);
-              await client.replyMessage(event.replyToken, {
+              await safeReply(event, {
                 type: 'text',
                 text: `查詢數據庫時發生錯誤：${result.error}`
               });
@@ -1955,7 +1962,7 @@ async function handleEvent(event) {
             }
 
             if (documents.length === 0) {
-              await client.replyMessage(event.replyToken, {
+              await safeReply(event, {
                 type: 'text',
                 text: '抱歉，食譜資料庫中找不到相關食譜，請換個關鍵字試試。'
               });
@@ -2060,12 +2067,12 @@ ${context}`;
               }
             };
 
-            await client.replyMessage(event.replyToken, replyMessage);
+            await safeReply(event, replyMessage);
             resolve(null);
 
           } catch (error) {
             console.error('Processing RAG result error:', error);
-            await client.replyMessage(event.replyToken, { type: 'text', text: '處理食譜回應時發生錯誤。' });
+            await safeReply(event, { type: 'text', text: '處理食譜回應時發生錯誤。' });
             resolve(null);
           }
         });
@@ -2082,7 +2089,7 @@ ${context}`;
       if (isCancelCommand) {
         userStates.delete(userId);
         const echo = { type: 'text', text: '❌ 已取消圖片處理。' };
-        return client.replyMessage(event.replyToken, [echo]);
+        return safeReply(event, [echo]);
       }
 
       // 判斷用戶意圖
@@ -2099,12 +2106,12 @@ ${context}`;
           if (!imageBuffer) {
             userStates.delete(userId);
             const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
-            return client.replyMessage(event.replyToken, [errorMsg]);
+            return safeReply(event, [errorMsg]);
           }
 
           // 分析圖片
           const processingMessage = { type: 'text', text: '🔍 正在分析圖片...\n⏳ 請稍等片刻...' };
-          await client.replyMessage(event.replyToken, [processingMessage]);
+          await safeReply(event, [processingMessage]);
 
           const analysis = await analyzeImageWithGemini(imageBuffer, userInput === '分析' ? null : userInput, userId);
 
@@ -2139,7 +2146,7 @@ ${context}`;
           type: 'text',
           text: '✏️ 請描述如何編輯這張圖片？\n\n範例：\n• 把背景改成海邊\n• 改成卡通風格\n• 加上彩虹和雲朵\n• 讓顏色更鮮豔\n\n如要取消，請輸入「取消」'
         };
-        return client.replyMessage(event.replyToken, [promptMessage]);
+        return safeReply(event, [promptMessage]);
 
       } else if (intent === 'save_box' || userInput === '存入 888box' || userInput === '存入' || userInput === '轉存' || userInput === '保存' || userInput.toLowerCase().includes('box')) {
         // 儲存至 888box
@@ -2150,7 +2157,7 @@ ${context}`;
           if (!imageBuffer) {
             userStates.delete(userId);
             const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
-            return client.replyMessage(event.replyToken, [errorMsg]);
+            return safeReply(event, [errorMsg]);
           }
 
           const filename = `line_img_${Date.now()}.jpg`;
@@ -2161,11 +2168,11 @@ ${context}`;
           userStates.delete(userId);
 
           const flexMessage = boxHelper.formatAssetFlexMessage(result);
-          return client.replyMessage(event.replyToken, [flexMessage]);
+          return safeReply(event, [flexMessage]);
         } catch (error) {
           console.error('❌ 上傳圖片至 888box 失敗:', error);
           userStates.delete(userId);
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: `❌ 圖片儲存至 888box 失敗：${error.message}`
           });
@@ -2183,7 +2190,7 @@ ${context}`;
       if (isCancelCommand) {
         userStates.delete(userId);
         const echo = { type: 'text', text: '❌ 已取消圖片編輯。' };
-        return client.replyMessage(event.replyToken, [echo]);
+        return safeReply(event, [echo]);
       }
 
       // 開始編輯圖片
@@ -2204,7 +2211,7 @@ ${context}`;
         if (!imageBuffer) {
           userStates.delete(userId);
           const errorMsg = { type: 'text', text: '❌ 抱歉，無法下載圖片。請重新傳送圖片。' };
-          return client.replyMessage(event.replyToken, [errorMsg]);
+          return safeReply(event, [errorMsg]);
         }
 
         // 發送處理中訊息
@@ -2212,7 +2219,7 @@ ${context}`;
           type: 'text',
           text: `🎨 正在編輯圖片：「${userInput}」\n⏳ 請稍等片刻，這可能需要 30-60 秒...\n\n💡 如要取消，請輸入「取消」`
         };
-        await client.replyMessage(event.replyToken, [processingMessage]);
+        await safeReply(event, [processingMessage]);
 
         // 編輯圖片
         const result = await editImageWithGemini(imageBuffer, userInput, userId);
@@ -2281,14 +2288,14 @@ ${context}`;
           type: 'text',
           text: '❌ 已取消圖片生成。\n\n如需重新生成圖片，請再次輸入圖片生成指令。'
         };
-        return client.replyMessage(event.replyToken, [cancelMessage]);
+        return safeReply(event, [cancelMessage]);
       } else {
         // 如果用戶在生成過程中發送了其他訊息，提醒他們可以取消
         const reminderMessage = {
           type: 'text',
           text: `🎨 圖片「${userState.prompt}」正在生成中...\n\n如要取消，請輸入「取消」。`
         };
-        return client.replyMessage(event.replyToken, [reminderMessage]);
+        return safeReply(event, [reminderMessage]);
       }
     }
 
@@ -2304,26 +2311,26 @@ ${context}`;
           footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }] }
         }
       };
-      return client.replyMessage(event.replyToken, [promptMessage]);
+      return safeReply(event, [promptMessage]);
     }
 
     // 處理等待圖片提示詞的狀態
     if (userState && userState.state === 'waiting_image_prompt') {
       if (userInput === '取消' || userInput === '退出' || userInput === '停止') {
         userStates.delete(userId);
-        return client.replyMessage(event.replyToken, { type: 'text', text: '已取消圖片生成。' });
+        return safeReply(event, { type: 'text', text: '已取消圖片生成。' });
       }
 
       const imagePrompt = userInput.trim();
       if (!imagePrompt || imagePrompt.length < 2) {
-        return client.replyMessage(event.replyToken, { type: 'text', text: '請提供有效的圖片描述。' });
+        return safeReply(event, { type: 'text', text: '請提供有效的圖片描述。' });
       }
 
       // 更新狀態為生成中（保留狀態）
       userStates.set(userId, { state: 'generating_image', prompt: imagePrompt });
 
       await showLoadingAnimation(userId, 60);
-      await client.replyMessage(event.replyToken, { type: 'text', text: `✨ 即將為您生成圖片：\n「${imagePrompt}」\n\n⏳ 請稍等片刻...` });
+      await safeReply(event, { type: 'text', text: `✨ 即將為您生成圖片：\n「${imagePrompt}」\n\n⏳ 請稍等片刻...` });
 
       setTimeout(async () => {
         try {
@@ -2346,7 +2353,7 @@ ${context}`;
 
       if (!imagePrompt || imagePrompt.length < 2) {
         const echo = { type: 'text', text: '請提供要生成的圖片描述。\n例如：!畫圖 一隻可愛的小貓\n或：幫我畫一張美麗的風景圖' };
-        return client.replyMessage(event.replyToken, [echo]);
+        return safeReply(event, [echo]);
       }
 
       // 設定用戶狀態為圖片生成中
@@ -2364,7 +2371,7 @@ ${context}`;
         type: 'text',
         text: `🎨 正在為您生成圖片：「${imagePrompt}」\n⏳ 請稍等片刻...\n\n💡 如要取消，請輸入「取消」、「退出」或「停止」`
       };
-      await client.replyMessage(event.replyToken, [processingMessage]);
+      await safeReply(event, [processingMessage]);
 
       // 呼叫圖片生成函數（使用 push message 發送結果）
       setTimeout(async () => {
@@ -2445,10 +2452,10 @@ ${context}`;
               }
             }
           };
-          return client.replyMessage(event.replyToken, [podcastMessage]);
+          return safeReply(event, [podcastMessage]);
         } catch (err) {
           console.error('獲取 Podcast 資訊錯誤:', err);
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 獲取播客資訊失敗：${err.message}` });
+          return safeReply(event, { type: 'text', text: `❌ 獲取播客資訊失敗：${err.message}` });
         }
       }
 
@@ -2458,10 +2465,10 @@ ${context}`;
           await showLoadingAnimation(userId, 10);
           const stats = await boxHelper.getStats();
           const statsFlex = boxHelper.formatStatsFlexMessage(stats);
-          return client.replyMessage(event.replyToken, [statsFlex]);
+          return safeReply(event, [statsFlex]);
         } catch (err) {
           console.error('獲取 888box 統計錯誤:', err);
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 獲取 888box 統計失敗：${err.message}` });
+          return safeReply(event, { type: 'text', text: `❌ 獲取 888box 統計失敗：${err.message}` });
         }
       }
 
@@ -2474,7 +2481,7 @@ ${context}`;
 
       if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
         await showLoadingAnimation(userId, 45);
-        await client.replyMessage(event.replyToken, { type: 'text', text: `📥 正在將遠端資產轉存至 888box...\n🔗 來源：${targetUrl}\n⏳ 請稍候...` });
+        await safeReply(event, { type: 'text', text: `📥 正在將遠端資產轉存至 888box...\n🔗 來源：${targetUrl}\n⏳ 請稍候...` });
 
         setTimeout(async () => {
           try {
@@ -2491,7 +2498,7 @@ ${context}`;
 
         return Promise.resolve(null);
       } else if (prefixMatch) {
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: '💡 請輸入完整的網址，例如：\n!box https://example.com/video.mp4\n!轉存 https://example.com/image.jpg'
         });
@@ -2509,7 +2516,7 @@ ${context}`;
       const newSess = sessionHelper.startNewSession(userId);
       userStates.delete(userId);
       const flexCard = sessionHelper.formatNewSessionFlex(newSess);
-      return client.replyMessage(event.replyToken, [flexCard]);
+      return safeReply(event, [flexCard]);
     }
 
     // 2. 查看話題歷史清單: /sessions 或 !sessions
@@ -2518,13 +2525,13 @@ ${context}`;
       const sessions = sessionHelper.listUserSessions(userId);
       const currentSess = sessionHelper.getOrCreateActiveSession(userId);
       if (!sessions || sessions.length === 0) {
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: '📚 目前尚無歷史話題紀錄。發送任何訊息即可自動開始新話題！'
         });
       }
       const flexCard = sessionHelper.formatSessionsListFlex(userId, sessions, currentSess.id);
-      return client.replyMessage(event.replyToken, [flexCard]);
+      return safeReply(event, [flexCard]);
     }
 
     // 3. 切換至指定話題: /session <id> 或 !session <id>
@@ -2534,12 +2541,12 @@ ${context}`;
       const res = sessionHelper.switchSession(userId, targetId);
       if (res.success) {
         const flexCard = sessionHelper.formatNewSessionFlex(res.session);
-        return client.replyMessage(event.replyToken, [
+        return safeReply(event, [
           { type: 'text', text: `✅ ${res.message}` },
           flexCard
         ]);
       } else {
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: `❌ ${res.message}`
         });
@@ -2551,7 +2558,7 @@ ${context}`;
     if (isResetCommand) {
       sessionHelper.clearCurrentSession(userId);
       userStates.delete(userId);
-      return client.replyMessage(event.replyToken, {
+      return safeReply(event, {
         type: 'text',
         text: '🧹 已成功清除當前話題的對話記憶！話題 ID 維持不變，現在讓我們開始全新的話題吧。\n（若要完全開立新話題，請發送 !new 或「開啟新對話」）'
       });
@@ -2561,7 +2568,7 @@ ${context}`;
     const isHelpCommand = /^(!help|help|!說明|說明|使用說明|功能清單|功能列表|指令|選單|menu|\/help|\/start)$/i.test(trimmedInput);
     if (isHelpCommand) {
       const helpFlex = sessionHelper.formatGlobalHelpFlex();
-      return client.replyMessage(event.replyToken, [helpFlex]);
+      return safeReply(event, [helpFlex]);
     }
 
     // David888 Wiki 筆記發布 / 閱讀 / 網頁轉文章指令
@@ -2626,7 +2633,7 @@ ${context}`;
             }
           }
         };
-        return client.replyMessage(event.replyToken, [wikiHelpFlex]);
+        return safeReply(event, [wikiHelpFlex]);
       }
 
       // 2. 轉存外部網頁成 Wiki 文章
@@ -2634,7 +2641,7 @@ ${context}`;
       if (parseMatch) {
         const sourceUrl = parseMatch[1];
         await showLoadingAnimation(userId, 45);
-        await client.replyMessage(event.replyToken, { type: 'text', text: `📥 正在將網頁解析為 Markdown 並發布至 Wiki...\n🔗 網址：${sourceUrl}\n⏳ 請稍候...` });
+        await safeReply(event, { type: 'text', text: `📥 正在將網頁解析為 Markdown 並發布至 Wiki...\n🔗 網址：${sourceUrl}\n⏳ 請稍候...` });
 
         setTimeout(async () => {
           try {
@@ -2665,10 +2672,10 @@ ${context}`;
             type: 'text',
             text: `📖 Wiki 筆記「${targetPath}」：\n\n${snippet}\n\n🌐 線上閱讀：https://wiki.david888.com/${targetPath}`
           };
-          return client.replyMessage(event.replyToken, [textMessage]);
+          return safeReply(event, [textMessage]);
         } catch (err) {
           console.error('Wiki 讀取錯誤:', err);
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 讀取 Wiki 失敗：${err.message}` });
+          return safeReply(event, { type: 'text', text: `❌ 讀取 Wiki 失敗：${err.message}` });
         }
       }
 
@@ -2681,10 +2688,10 @@ ${context}`;
           await showLoadingAnimation(userId, 20);
           const publishRes = await wikiHelper.publishNote(targetPath, `\n\n${appendText}`, { append: true });
           const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, `已追加筆記至 ${targetPath}`);
-          return client.replyMessage(event.replyToken, [flexMsg]);
+          return safeReply(event, [flexMsg]);
         } catch (err) {
           console.error('Wiki 追加錯誤:', err);
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 追加 Wiki 內容失敗：${err.message}` });
+          return safeReply(event, { type: 'text', text: `❌ 追加 Wiki 內容失敗：${err.message}` });
         }
       }
 
@@ -2701,7 +2708,7 @@ ${context}`;
         }
 
         if (!content || content.trim().length === 0) {
-          return client.replyMessage(event.replyToken, {
+          return safeReply(event, {
             type: 'text',
             text: '💡 請輸入要發布的內容，例如：\n!wiki my-path # 我的筆記標題\n這是筆記內容...'
           });
@@ -2712,10 +2719,10 @@ ${context}`;
           const publishRes = await wikiHelper.publishNote(notePath, content.trim());
           const firstLine = content.trim().split('\n')[0].replace(/^#+\s*/, '');
           const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, firstLine || notePath, content.trim().slice(0, 150));
-          return client.replyMessage(event.replyToken, [flexMsg]);
+          return safeReply(event, [flexMsg]);
         } catch (err) {
           console.error('Wiki 發布錯誤:', err);
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 發布 Wiki 筆記失敗：${err.message}` });
+          return safeReply(event, { type: 'text', text: `❌ 發布 Wiki 筆記失敗：${err.message}` });
         }
       }
     }
@@ -2739,9 +2746,9 @@ ${context}`;
         const rRes = await searchHelper.readWebPage(targetUrl);
         if (rRes.success) {
           const text = `🌐 網頁解析成功 (${rRes.endpoint})：\n\n${rRes.content.slice(0, 1000)}...`;
-          return client.replyMessage(event.replyToken, { type: 'text', text });
+          return safeReply(event, { type: 'text', text });
         } else {
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 網頁解析失敗：${rRes.error}` });
+          return safeReply(event, { type: 'text', text: `❌ 網頁解析失敗：${rRes.error}` });
         }
       }
 
@@ -2753,9 +2760,9 @@ ${context}`;
         const sRes = await searchHelper.searchWeb(query);
         if (sRes.success) {
           const flexMsg = searchHelper.formatSearchFlexMessage(query, sRes.content);
-          return client.replyMessage(event.replyToken, [flexMsg]);
+          return safeReply(event, [flexMsg]);
         } else {
-          return client.replyMessage(event.replyToken, { type: 'text', text: `❌ 搜尋失敗：${sRes.error}` });
+          return safeReply(event, { type: 'text', text: `❌ 搜尋失敗：${sRes.error}` });
         }
       }
     }
@@ -2811,7 +2818,7 @@ ${context}`;
         },
       }
 
-      return client.replyMessage(event.replyToken, [buttons, buttons2, buttons3])
+      return safeReply(event, [buttons, buttons2, buttons3])
     }
 
     // const hintMessage = {
@@ -2837,7 +2844,7 @@ ${context}`;
         }
       };
 
-      return client.replyMessage(event.replyToken, [locationRequestMessage]);
+      return safeReply(event, [locationRequestMessage]);
     }
 
     // Debug 指令
@@ -2852,7 +2859,7 @@ ${context}`;
 - 原始訊息：${event.message.text}`
 
       const echo = { type: 'text', text: debugInfo }
-      return client.replyMessage(event.replyToken, [echo])
+      return safeReply(event, [echo])
     }
 
     // 處理工具網站請求
@@ -2967,7 +2974,7 @@ ${context}`;
           }
         }
       };
-      return client.replyMessage(event.replyToken, [toolMessage]);
+      return safeReply(event, [toolMessage]);
     }
 
     if (userInput === '解答之書') {
@@ -2984,10 +2991,10 @@ ${context}`;
             footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✨ 願這個解答為你指引方向', size: 'xs', color: '#999999', align: 'center' }] }
           }
         };
-        return client.replyMessage(event.replyToken, [flexMessage])
+        return safeReply(event, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得解答。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
     }
 
@@ -3005,10 +3012,10 @@ ${context}`;
             footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '✨ 品味古典詩詞之美', size: 'xs', color: '#999999', align: 'center' }] }
           }
         };
-        return client.replyMessage(event.replyToken, [flexMessage])
+        return safeReply(event, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得唐詩。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
     }
 
@@ -3026,10 +3033,10 @@ ${context}`;
             footer: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: '🏯 願神明保佑', size: 'xs', color: '#999999', align: 'center' }] }
           }
         };
-        return client.replyMessage(event.replyToken, [flexMessage])
+        return safeReply(event, [flexMessage])
       } else {
         const echo = { type: 'text', text: '抱歉，目前無法取得淺草籤。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
     }
 
@@ -3058,7 +3065,7 @@ ${context}`;
               type: 'text',
               text: '🌤️ 目前沒有天氣特報\n\n台灣地區天氣狀況良好，請安心出行！'
             }
-            return client.replyMessage(event.replyToken, [echo])
+            return safeReply(event, [echo])
           }
 
           // 如果特報太多，使用簡化的文字格式顯示所有特報
@@ -3094,7 +3101,7 @@ ${context}`;
             weatherReport += `📊 總計：${alertLocations.length} 個縣市有特報`
 
             const echo = { type: 'text', text: weatherReport }
-            return client.replyMessage(event.replyToken, [echo])
+            return safeReply(event, [echo])
           }
 
           // 創建 Flex Message（限制卡片數量）
@@ -3198,16 +3205,16 @@ ${context}`;
             flexMessage.contents.contents.push(bubble)
           })
 
-          return client.replyMessage(event.replyToken, [flexMessage])
+          return safeReply(event, [flexMessage])
 
         } else {
           const echo = { type: 'text', text: '抱歉，無法取得天氣特報資訊。' }
-          return client.replyMessage(event.replyToken, [echo])
+          return safeReply(event, [echo])
         }
       } catch (error) {
         console.error('天氣特報 API 錯誤:', error)
         const echo = { type: 'text', text: '抱歉，天氣特報服務目前無法使用。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
     }
 
@@ -3219,7 +3226,7 @@ ${context}`;
         type: 'text',
         text: '⚖️ 台灣法律諮詢服務\n\n請問您有什麼法律問題？\n例如：\n• AI產生的不實訊息，散播者會構成加重誹謗罪嗎？\n• 房屋買賣契約的注意事項\n• 勞動權益相關問題\n\n📝 請詳細描述您的問題，我會為您提供專業的法律分析。\n\n如要取消，請輸入「取消」或「退出」'
       }
-      return client.replyMessage(event.replyToken, [echo])
+      return safeReply(event, [echo])
     }
 
     if (userInput === '奇門遁甲') {
@@ -3298,7 +3305,7 @@ ${context}`;
           }
         }
       };
-      return client.replyMessage(event.replyToken, [qimenPrompt])
+      return safeReply(event, [qimenPrompt])
     }
 
     // 檢查用戶是否正在進行奇門遁甲占卜
@@ -3307,7 +3314,7 @@ ${context}`;
       if (userInput === '取消' || userInput === '退出') {
         userStates.delete(userId)
         const echo = { type: 'text', text: '已取消奇門遁甲占卜。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
 
       // 清除用戶狀態
@@ -3340,15 +3347,15 @@ ${context}`;
               footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [{ type: 'button', action: { type: 'message', label: '✖️ 退出', text: '取消' }, style: 'secondary', color: '#AAAAAA', height: 'sm' }, { type: 'text', text: '☯️ 天機玄妙，僅供參考', size: 'xs', color: '#999999', align: 'center', margin: 'sm' }] }
             }
           };
-          return client.replyMessage(event.replyToken, [flexMessage])
+          return safeReply(event, [flexMessage])
         } else {
           const echo = { type: 'text', text: '抱歉，目前無法取得奇門遁甲占卜結果。' }
-          return client.replyMessage(event.replyToken, [echo])
+          return safeReply(event, [echo])
         }
       } catch (error) {
         console.error('奇門遁甲 API 錯誤:', error)
         const echo = { type: 'text', text: '抱歉，奇門遁甲服務目前無法使用。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
     }
 
@@ -3358,7 +3365,7 @@ ${context}`;
       if (userInput === '取消' || userInput === '退出') {
         userStates.delete(userId)
         const echo = { type: 'text', text: '已取消法律諮詢。' }
-        return client.replyMessage(event.replyToken, [echo])
+        return safeReply(event, [echo])
       }
 
       // 清除用戶狀態
@@ -3373,7 +3380,7 @@ ${context}`;
           type: 'text',
           text: '⚖️ 正在分析您的法律問題...\n⏳ 請稍等片刻，台灣法律專家正在為您提供專業解答...'
         }
-        await client.replyMessage(event.replyToken, [processingMessage])
+        await safeReply(event, [processingMessage])
 
         // 呼叫台灣法律 LLM API
         const legalResponse = await axios.post('https://taiwan-law-bot-dev.onrender.com/chat', {
