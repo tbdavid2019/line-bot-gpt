@@ -244,6 +244,23 @@ const searchTools = [
   {
     type: 'function',
     function: {
+      name: 'get_current_weather',
+      description: '查詢台灣各縣市鄉鎮區或全球城市的即時天氣、氣溫、體感溫度、濕度、降雨機率與天氣狀況。當使用者詢問天氣、氣溫、降雨、是否帶傘時呼叫此工具。',
+      parameters: {
+        type: 'object',
+        properties: {
+          location: {
+            type: 'string',
+            description: '查詢的地點名稱，例如：高雄鼓山區、台北南港、台中西屯、台南、東京'
+          }
+        },
+        required: ['location']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'read_web_page',
       description: '讀取並提取指定網址 (URL) 或線上文件 (網頁、新聞、GitHub、PDF、David888 Wiki 筆記等) 的完整內文轉換為 Markdown。當需要深入閱讀特定網站文章或連結內容時呼叫。',
       parameters: {

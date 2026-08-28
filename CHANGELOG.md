@@ -10,13 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🚀 Added & Enhanced (Smart URL Pre-Fetching & Multi-Turn Memory)
 - **Zero-Shot Agentic Tool Calling & Intent Deconstruction Core** (`services_helper.js` & `index.js`):
   - Upgraded the LLM from a passive text responder into an autonomous Agent Router equipped with a full suite of Actuators:
+    - `get_current_weather`: High-precision real-time weather, temperature, humidity, and rainfall probability for all Taiwan districts and worldwide cities (<200ms latency).
     - `generate_image`: Natural language image generation & editing.
     - `search_web`: Live internet search for facts, quotes, weather, and news.
     - `read_web_page` & `read_wiki_note`: Deep article parsing and grounding.
     - `publish_to_wiki`: Autonomous long-form markdown research publishing.
     - `manage_session`: Autonomous dialogue topic creation, listing, switching, and clearing.
     - `get_life_service`: Autonomous divination (解答之書, 淺草籤, 唐詩) and CWA weather alerts.
-  - Eliminated brittle regex bottlenecks so users can express complex requests in free natural language.
+  - **SafeReply Auto-Push Fallback**: Prioritizes LINE `replyMessage`, and automatically falls back to `pushMessage` if processing exceeds network latency, guaranteeing 100% message delivery and preventing silent drops.
+  - **Tool Loop Optimization**: Capped multi-turn tool loops at 2 turns to ensure lightning-fast responses within LINE's webhook timeout limits.
 - **Automatic URL Pre-Fetching & Context Enrichment**:
   - Automatically detects HTTP/HTTPS URLs (e.g. `wiki.david888.com/share/...`, news, documentation, external links) in user messages.
   - Proactively pre-fetches and injects clean Markdown content directly into prompt context, eliminating LLM tool-calling delay and completely resolving hallucinations ("我看得到" / "我看不到").

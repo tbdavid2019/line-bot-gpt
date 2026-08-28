@@ -19,6 +19,28 @@ const searchHelper = require('./search_helper')
 const sessionHelper = require('./session_helper')
 const servicesHelper = require('./services_helper')
 
+// 安全回覆函數：優先使用 replyMessage，若逾時或失敗自動降級為 pushMessage，保證訊息 100% 抵達使用者
+async function safeReply(event, messages) {
+  const userId = event.source?.userId || event.source?.groupId || event.source?.roomId;
+  const replyToken = event.replyToken;
+  const msgArray = Array.isArray(messages) ? messages : [messages];
+  if (replyToken) {
+    try {
+      await client.replyMessage(replyToken, msgArray);
+      return;
+    } catch (replyErr) {
+      console.warn(`⚠️ replyMessage 失敗 (${replyErr.message})，自動切換至 pushMessage 發送...`);
+    }
+  }
+  if (userId) {
+    try {
+      await client.pushMessage(userId, msgArray);
+    } catch (pushErr) {
+      console.error(`❌ pushMessage 亦失敗:`, pushErr.message);
+    }
+  }
+}
+
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
 function getFileExtensionFromMimeType(mimeType) {
@@ -1499,7 +1521,7 @@ async function handleEvent(event) {
         });
 
         let turnCount = 0;
-        while (turnCount < 5) {
+        while (turnCount < 2) {
           const currentChoice = currentCompletion.choices[0];
           const toolCalls = currentChoice.message?.tool_calls;
 
@@ -1518,7 +1540,23 @@ async function handleEvent(event) {
 
             console.log(`🎤 語音執行 Tool Call [${fnName}]，參數:`, args);
 
-            if (fnName === 'search_web') {
+            if (fnName === 'get_current_weather') {
+              try {
+                const wRes = await servicesHelper.getRealtimeWeather(args.location);
+                const toolContent = wRes.success ? wRes.summary : `查詢天氣失敗: ${wRes.error}`;
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: toolContent
+                });
+              } catch (wErr) {
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: `查詢天氣失敗: ${wErr.message}`
+                });
+              }
+            } else if (fnName === 'search_web') {
               const sRes = await searchHelper.searchWeb(args.query);
               const toolContent = sRes.success 
                 ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
@@ -1562,7 +1600,7 @@ async function handleEvent(event) {
                 const publishRes = await wikiHelper.publishNote(slug, args.markdown_content);
                 const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, `🎤 您說：「${transcription}」\n\n${args.summary}`);
                 appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);
-                return client.replyMessage(event.replyToken, [flexMsg]);
+                return safeReply(event, [flexMsg]);
               } catch (wikiErr) {
                 console.error('語音 Tool 發布 Wiki 失敗:', wikiErr);
                 messages.push({
@@ -1589,16 +1627,16 @@ async function handleEvent(event) {
               try {
                 if (args.service === 'answer_book') {
                   const res = await servicesHelper.getAnswerBook();
-                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                  if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
                 } else if (args.service === 'temple_oracle') {
                   const res = await servicesHelper.getTempleOracle();
-                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                  if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
                 } else if (args.service === 'tang_poetry') {
                   const res = await servicesHelper.getTangPoetry();
-                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                  if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
                 } else if (args.service === 'weather_alerts') {
                   const res = await servicesHelper.getWeatherAlerts();
-                  if (res.success) return client.replyMessage(event.replyToken, [{ type: 'text', text: `🎤 語音查詢天氣特報：\n\n${res.summary}` }]);
+                  if (res.success) return safeReply(event, [{ type: 'text', text: `🎤 語音查詢天氣特報：\n\n${res.summary}` }]);
                 }
               } catch (servErr) {
                 console.error('語音 Tool get_life_service 失敗:', servErr);
@@ -1628,7 +1666,7 @@ async function handleEvent(event) {
             const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, `🎤 您說：「${transcription}」\n\n${summary}`);
             appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
-            return client.replyMessage(event.replyToken, [flexMsg]);
+            return safeReply(event, [flexMsg]);
           } catch (wikiErr) {
             console.error('語音偽 Tool Call 發布失敗:', wikiErr);
           }
@@ -1642,7 +1680,7 @@ async function handleEvent(event) {
             const summary = gptResponse.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, transcription.slice(0, 30), `🎤 您說：「${transcription}」\n\n${summary}`);
             appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
-            return client.replyMessage(event.replyToken, [flexMsg]);
+            return safeReply(event, [flexMsg]);
           } catch (wikiErr) {}
         }
 
@@ -1650,14 +1688,14 @@ async function handleEvent(event) {
         const cleanedText = gptResponse.replace(/\[(?:CALL:\/?\w+|TOOL_CALL:\w+)[^\]]*\]/gi, '').trim();
         const replyText = cleanedText || gptResponse;
         appendUserHistory(userId, transcription, replyText);
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: `🎤 您說：「${transcription}」\n\n${replyText}`
         });
 
       } catch (error) {
         console.error('❌ 處理音訊訊息錯誤:', error);
-        return client.replyMessage(event.replyToken, {
+        return safeReply(event, {
           type: 'text',
           text: '❌ 抱歉，處理音訊時發生錯誤。'
         });
@@ -3648,7 +3686,7 @@ ${context}`;
     });
 
     let turnCount = 0;
-    while (turnCount < 5) {
+    while (turnCount < 2) {
       const currentChoice = currentCompletion.choices[0];
       const toolCalls = currentChoice.message?.tool_calls;
 
@@ -3667,7 +3705,23 @@ ${context}`;
 
         console.log(`⚡ 執行 Tool Call [${fnName}]，參數:`, args);
 
-        if (fnName === 'search_web') {
+        if (fnName === 'get_current_weather') {
+          try {
+            const wRes = await servicesHelper.getRealtimeWeather(args.location);
+            const toolContent = wRes.success ? wRes.summary : `查詢天氣失敗: ${wRes.error}`;
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: toolContent
+            });
+          } catch (wErr) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `查詢天氣失敗: ${wErr.message}`
+            });
+          }
+        } else if (fnName === 'search_web') {
           const sRes = await searchHelper.searchWeb(args.query);
           const toolContent = sRes.success 
             ? `即時搜尋 [${args.query}] 的結果 (${sRes.endpoint}):\n\n${sRes.content}`
@@ -3713,7 +3767,7 @@ ${context}`;
             });
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, args.summary);
             appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);
-            return client.replyMessage(event.replyToken, [flexMsg]);
+            return safeReply(event, [flexMsg]);
           } catch (wikiErr) {
             console.error('Tool 呼叫發布 Wiki 失敗:', wikiErr);
             messages.push({
@@ -3727,7 +3781,7 @@ ${context}`;
             const result = await boxHelper.uploadFromUrl(args.url, { title: args.title || '雲端資產' });
             const flexMsg = boxHelper.formatAssetFlexMessage(result);
             appendUserHistory(userId, userInput, `[已轉存 888box 資產: ${result.url}] ${args.title || ''}`);
-            return client.replyMessage(event.replyToken, [flexMsg]);
+            return safeReply(event, [flexMsg]);
           } catch (boxErr) {
             console.error('Tool 呼叫 888box 轉存失敗:', boxErr);
             messages.push({
@@ -3755,25 +3809,25 @@ ${context}`;
             if (args.action === 'new') {
               const newSess = sessionHelper.startNewSession(userId, args.topic_title || '');
               const flexCard = sessionHelper.formatNewSessionFlex(newSess);
-              return client.replyMessage(event.replyToken, [flexCard]);
+              return safeReply(event, [flexCard]);
             } else if (args.action === 'list') {
               const sessions = sessionHelper.listUserSessions(userId);
               const currentSess = sessionHelper.getOrCreateActiveSession(userId);
               if (!sessions || sessions.length === 0) {
-                return client.replyMessage(event.replyToken, { type: 'text', text: '📚 目前尚無歷史話題紀錄。發送任何訊息即可開始新話題！' });
+                return safeReply(event, { type: 'text', text: '📚 目前尚無歷史話題紀錄。發送任何訊息即可開始新話題！' });
               }
               const flexCard = sessionHelper.formatSessionsListFlex(userId, sessions, currentSess.id);
-              return client.replyMessage(event.replyToken, [flexCard]);
+              return safeReply(event, [flexCard]);
             } else if (args.action === 'clear') {
               sessionHelper.clearCurrentSession(userId);
-              return client.replyMessage(event.replyToken, { type: 'text', text: '🧹 已成功清空當前話題的對話記憶！' });
+              return safeReply(event, { type: 'text', text: '🧹 已成功清空當前話題的對話記憶！' });
             } else if (args.action === 'switch' && args.target_session_id) {
               const res = sessionHelper.switchSession(userId, args.target_session_id);
               if (res.success) {
                 const flexCard = sessionHelper.formatNewSessionFlex(res.session);
-                return client.replyMessage(event.replyToken, [{ type: 'text', text: `✅ ${res.message}` }, flexCard]);
+                return safeReply(event, [{ type: 'text', text: `✅ ${res.message}` }, flexCard]);
               } else {
-                return client.replyMessage(event.replyToken, { type: 'text', text: `❌ ${res.message}` });
+                return safeReply(event, { type: 'text', text: `❌ ${res.message}` });
               }
             }
           } catch (sessErr) {
@@ -3783,16 +3837,16 @@ ${context}`;
           try {
             if (args.service === 'answer_book') {
               const res = await servicesHelper.getAnswerBook();
-              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+              if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
             } else if (args.service === 'temple_oracle') {
               const res = await servicesHelper.getTempleOracle();
-              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+              if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
             } else if (args.service === 'tang_poetry') {
               const res = await servicesHelper.getTangPoetry();
-              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+              if (res.success && res.flexMessage) return safeReply(event, [res.flexMessage]);
             } else if (args.service === 'weather_alerts') {
               const res = await servicesHelper.getWeatherAlerts();
-              if (res.success) return client.replyMessage(event.replyToken, [{ type: 'text', text: res.summary }]);
+              if (res.success) return safeReply(event, [{ type: 'text', text: res.summary }]);
             }
           } catch (servErr) {
             console.error('Tool 呼叫 get_life_service 失敗:', servErr);
@@ -3820,7 +3874,6 @@ ${context}`;
     let rawContent = choice.message?.content || '';
 
     // 2. 第二道防線：攔截偽 Tool Call 指令 (如 [CALL:/wiki ...], [CALL:wiki ...], <tool_call> 等)
-    // 防止開源模型或未支援 Function Calling 的模型將內部偽代碼直接輸出給用戶
     const pseudoCall = wikiHelper.extractPseudoWikiCall(rawContent);
     if (pseudoCall && pseudoCall.content) {
       console.log('⚡ 成功攔截偽 Tool Call 指令，自動提取內容發布至 David888 Wiki...', pseudoCall.slug);
@@ -3832,7 +3885,7 @@ ${context}`;
         const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, summary);
         appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
-        return client.replyMessage(event.replyToken, [flexMsg]);
+        return safeReply(event, [flexMsg]);
       } catch (wikiErr) {
         console.error('偽 Tool Call 發布 Wiki 失敗:', wikiErr);
       }
@@ -3861,7 +3914,7 @@ ${context}`;
         const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
         appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
-        return client.replyMessage(event.replyToken, [flexMsg]);
+        return safeReply(event, [flexMsg]);
       } catch (wikiErr) {
         console.warn('用戶指定 Wiki 發布失敗，降級為純文字發送:', wikiErr);
       }
@@ -3887,7 +3940,7 @@ ${context}`;
         const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
         appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
-        return client.replyMessage(event.replyToken, [flexMsg]);
+        return safeReply(event, [flexMsg]);
       } catch (wikiErr) {
         console.warn('自動發布 Wiki 失敗，降級為純文字發送:', wikiErr);
       }
@@ -3898,9 +3951,12 @@ ${context}`;
     const finalReplyText = cleanedText || rawContent || '抱歉，我沒有話可說了。';
     appendUserHistory(userId, userInput, finalReplyText);
     const echo = { type: 'text', text: finalReplyText };
-    return client.replyMessage(event.replyToken, [echo]);
+    return safeReply(event, [echo]);
   } catch (err) {
-    console.log(err)
+    console.error('❌ handleEvent 處理錯誤:', err);
+    try {
+      await safeReply(event, [{ type: 'text', text: '抱歉，處理您的訊息時發生錯誤，請稍後再試。' }]);
+    } catch (e) {}
   }
 }
 

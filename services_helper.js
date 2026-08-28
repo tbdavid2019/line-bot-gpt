@@ -184,9 +184,102 @@ async function getWeatherAlerts() {
   return { success: false, error: '無法取得氣象署特報資料' };
 }
 
+// 5. 即時天氣預報查詢 (全台各縣市與鄉鎮區高精準即時天氣)
+const TAIWAN_GEO_MAP = {
+  '高雄鼓山': { lat: 22.64, lng: 120.27, name: '高雄市鼓山區' },
+  '高雄鼓山區': { lat: 22.64, lng: 120.27, name: '高雄市鼓山區' },
+  '鼓山': { lat: 22.64, lng: 120.27, name: '高雄市鼓山區' },
+  '鼓山區': { lat: 22.64, lng: 120.27, name: '高雄市鼓山區' },
+  '高雄左營': { lat: 22.69, lng: 120.29, name: '高雄市左營區' },
+  '左營': { lat: 22.69, lng: 120.29, name: '高雄市左營區' },
+  '高雄': { lat: 22.62, lng: 120.30, name: '高雄市' },
+  '高雄市': { lat: 22.62, lng: 120.30, name: '高雄市' },
+  '台北': { lat: 25.04, lng: 121.56, name: '台北市' },
+  '台北市': { lat: 25.04, lng: 121.56, name: '台北市' },
+  '台北南港': { lat: 25.05, lng: 121.61, name: '台北市南港區' },
+  '南港': { lat: 25.05, lng: 121.61, name: '台北市南港區' },
+  '台北信義': { lat: 25.03, lng: 121.56, name: '台北市信義區' },
+  '新北': { lat: 25.01, lng: 121.46, name: '新北市' },
+  '新北市': { lat: 25.01, lng: 121.46, name: '新北市' },
+  '板橋': { lat: 25.01, lng: 121.46, name: '新北市板橋區' },
+  '台中': { lat: 24.15, lng: 120.67, name: '台中市' },
+  '台中市': { lat: 24.15, lng: 120.67, name: '台中市' },
+  '台南': { lat: 22.99, lng: 120.21, name: '台南市' },
+  '台南市': { lat: 22.99, lng: 120.21, name: '台南市' },
+  '桃園': { lat: 24.99, lng: 121.30, name: '桃園市' },
+  '桃園市': { lat: 24.99, lng: 121.30, name: '桃園市' },
+  '新竹': { lat: 24.81, lng: 120.96, name: '新竹市' },
+  '新竹市': { lat: 24.81, lng: 120.96, name: '新竹市' },
+  '基隆': { lat: 25.13, lng: 121.74, name: '基隆市' },
+  '宜蘭': { lat: 24.75, lng: 121.75, name: '宜蘭縣' },
+  '花蓮': { lat: 23.99, lng: 121.60, name: '花蓮縣' },
+  '台東': { lat: 22.75, lng: 121.15, name: '台東縣' },
+  '屏東': { lat: 22.67, lng: 120.49, name: '屏東縣' },
+  '澎湖': { lat: 23.57, lng: 119.57, name: '澎湖縣' }
+};
+
+function getWeatherDesc(code) {
+  if (code === 0) return '晴朗 ☀️';
+  if (code === 1 || code === 2) return '晴時多雲 🌤️';
+  if (code === 3) return '多雲陰天 ☁️';
+  if (code >= 45 && code <= 48) return '有霧 🌫️';
+  if (code >= 51 && code <= 55) return '毛毛雨 🌦️';
+  if (code >= 61 && code <= 65) return '下雨 🌧️';
+  if (code >= 80 && code <= 82) return '短暫陣雨 🌧️';
+  if (code >= 95) return '雷陣雨 ⛈️';
+  return '局部短暫雨 🌦️';
+}
+
+async function getRealtimeWeather(locQuery) {
+  let lat = 25.04;
+  let lng = 121.56;
+  let resolvedName = locQuery || '台灣';
+
+  const cleanKey = (locQuery || '').replace(/[市區縣鄉鎮]/g, '').trim();
+  for (const [k, v] of Object.entries(TAIWAN_GEO_MAP)) {
+    if ((locQuery && locQuery.includes(k)) || k.includes(cleanKey)) {
+      lat = v.lat;
+      lng = v.lng;
+      resolvedName = v.name;
+      break;
+    }
+  }
+
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTaipei`;
+    const res = await axios.get(url, { timeout: 4000 });
+    const curr = res.data.current;
+    const daily = res.data.daily;
+
+    const desc = getWeatherDesc(curr.weather_code);
+    const maxTemp = daily?.temperature_2m_max?.[0] ?? curr.temperature_2m;
+    const minTemp = daily?.temperature_2m_min?.[0] ?? curr.temperature_2m;
+    const rainProb = daily?.precipitation_probability_max?.[0] ?? 0;
+
+    const summary = `📍 【${resolvedName} 即時天氣預報】\n` +
+      `• 當前天氣：${desc}\n` +
+      `• 當前氣溫：${curr.temperature_2m}°C（體感約 ${curr.apparent_temperature}°C）\n` +
+      `• 今日氣溫範圍：${minTemp}°C ~ ${maxTemp}°C\n` +
+      `• 相對濕度：${curr.relative_humidity_2m}%\n` +
+      `• 降雨機率：${rainProb}%\n` +
+      `• 風速：${curr.wind_speed_10m} km/h\n` +
+      `${rainProb > 40 || curr.rain > 0 ? '💡 降雨機率偏高，外出請務必攜帶雨具！' : '💡 天氣舒適，適合外出！'}`;
+
+    return {
+      success: true,
+      location: resolvedName,
+      summary: summary
+    };
+  } catch (err) {
+    console.error('即時天氣查詢失敗:', err.message);
+    return { success: false, error: '即時天氣查詢失敗' };
+  }
+}
+
 module.exports = {
   getAnswerBook,
   getTangPoetry,
   getTempleOracle,
-  getWeatherAlerts
+  getWeatherAlerts,
+  getRealtimeWeather
 };
