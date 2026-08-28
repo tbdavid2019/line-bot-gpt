@@ -67,7 +67,14 @@ const primaryLlmClient = primaryKey ? new OpenAI({
   baseURL: process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'
 }) : null;
 
-// 初始化備用 LLM 客戶端 (Fallback: Groq / openai/gpt-oss-20b)
+// 初始化 Google Gemini LLM 客戶端 (Tier 2: 百萬級 Token Context / 支援 Tool Calling / 高可用)
+const geminiKey = process.env.GEMINI_API_KEY || process.env.FALLBACK_IMAGE_API_KEY;
+const geminiLlmClient = geminiKey ? new OpenAI({
+  apiKey: geminiKey,
+  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+}) : null;
+
+// 初始化備用 LLM 客戶端 (Tier 3: Groq / openai/gpt-oss-20b)
 const fallbackKey = process.env.FALLBACK_LLM_KEY || process.env.ASR_API_GROQ_KEY;
 const fallbackLlmClient = fallbackKey ? new OpenAI({
   apiKey: fallbackKey,
@@ -75,12 +82,12 @@ const fallbackLlmClient = fallbackKey ? new OpenAI({
 }) : null;
 
 // 相容舊有 openai 參考
-const openai = primaryLlmClient || fallbackLlmClient;
+const openai = primaryLlmClient || geminiLlmClient || fallbackLlmClient;
 
 // 多輪 Agentic Tool Calling 最大循環上限 (預設 10 輪)
 const MAX_AGENT_TURNS = parseInt(process.env.MAX_AGENT_TURNS || '10', 10);
 
-// 統一 LLM Chat Completion 呼叫函數（具備自動 Failover）
+// 統一 LLM Chat Completion 呼叫函數（具備 3-Tier 自動 Failover）
 async function createChatCompletion(params) {
   // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna / deepseek-v4-flash)
   if (primaryLlmClient) {
@@ -92,11 +99,28 @@ async function createChatCompletion(params) {
       });
       return completion;
     } catch (primaryErr) {
-      console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至備用端點...`);
+      console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至 Google Gemini 端點...`);
     }
   }
 
-  // 2. 切換至備用端點 (Groq 多模型自動輪替 Failover 支援)
+  // 2. 切換至 Google Gemini 官方 OpenAI 相容端點 (Gemini 2.5 Flash / 百萬 Token Context / 零限額崩潰)
+  if (geminiLlmClient) {
+    const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    for (const model of geminiModels) {
+      try {
+        console.log(`🤖 使用 Google Gemini LLM 端點 (${model} @ Google)...`);
+        const completion = await geminiLlmClient.chat.completions.create({
+          ...params,
+          model: model
+        });
+        return completion;
+      } catch (geminiErr) {
+        console.warn(`⚠️ Gemini 模型 [${model}] 呼叫失敗 (${geminiErr.message})，自動嘗試下一個模型...`);
+      }
+    }
+  }
+
+  // 3. 切換至 Groq 備用端點 (Groq 多模型自動輪替 Failover 支援)
   if (fallbackLlmClient) {
     const candidateModels = [
       process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b',
@@ -106,7 +130,7 @@ async function createChatCompletion(params) {
     let lastError = null;
     for (const model of candidateModels) {
       try {
-        console.log(`🤖 使用備用 LLM 端點 (${model} @ Groq)...`);
+        console.log(`🤖 使用 Groq 備用 LLM 端點 (${model} @ Groq)...`);
         const completion = await fallbackLlmClient.chat.completions.create({
           ...params,
           model: model
@@ -120,7 +144,7 @@ async function createChatCompletion(params) {
     if (lastError) throw lastError;
   }
 
-  throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / FALLBACK_LLM_KEY)');
+  throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / GEMINI_API_KEY / FALLBACK_LLM_KEY)');
 }
 
 // 用戶多輪對話歷史記憶 (由 sessionHelper 提供 7 天長效 Session 與磁碟持久化)

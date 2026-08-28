@@ -18,8 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `manage_session`: Autonomous dialogue topic creation, listing, switching, and clearing.
     - `get_life_service`: Autonomous divination (解答之書, 淺草籤, 唐詩) and CWA weather alerts.
   - **SafeReply Auto-Push Fallback**: Prioritizes LINE `replyMessage`, and automatically falls back to `pushMessage` if processing exceeds network latency, guaranteeing 100% message delivery and preventing silent drops.
+  - **3-Tier High-Availability LLM Architecture with Google Gemini**:
+    - **Tier 1 (Primary)**: `nen.com.tw` (`gpt-5.6-luna` / `deepseek-v4-flash`).
+    - **Tier 2 (High-Capacity Fallback)**: Google Gemini Official OpenAI-compatible endpoint (`gemini-2.5-flash` / `gemini-2.0-flash`), featuring 1,000,000 token context window, native tool calling, ultra-high TPM, and zero rate-limit crashing.
+    - **Tier 3 (Multi-Model Candidate Pool)**: Groq (`openai/gpt-oss-20b` -> `qwen/qwen3.8-27b` -> `openai/gpt-oss-120b`).
   - **10-Turn Multi-Turn ReAct Loop (`MAX_AGENT_TURNS=10`)**: Configured up to 10 autonomous reasoning & tool execution cycles, allowing the Agent to perform multi-step chained queries, page reading, calculations, and structured synthesis without artificial turn cutoffs.
-  - **Multi-Model Failover Pool on Groq**: Automatically rotates across `openai/gpt-oss-20b` -> `qwen/qwen3.8-27b` -> `openai/gpt-oss-120b` on 429 TPM limits, ensuring 99.99% service availability.
   - **Token Budget & Timeout Hardening**: Tightened search timeout to 3.5s, compacted search snippets to 1,500 chars, and limited prompt history to 6 turns (max 500 chars/turn) to strictly eliminate rate-limiting errors.
 - **Automatic URL Pre-Fetching & Context Enrichment**:
   - Automatically detects HTTP/HTTPS URLs (e.g. `wiki.david888.com/share/...`, news, documentation, external links) in user messages.
