@@ -1630,7 +1630,11 @@ async function handleEvent(event) {
             } else if (fnName === 'publish_to_wiki') {
               try {
                 const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
-                const publishRes = await wikiHelper.publishNote(slug, args.markdown_content);
+                const publishRes = await wikiHelper.publishNote(slug, args.markdown_content, {
+                  theme: args.theme || 'claude-canvas',
+                  width: args.width || '100%',
+                  title: args.title
+                });
                 const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, `🎤 您說：「${transcription}」\n\n${args.summary}`);
                 appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);
                 return safeReply(event, [flexMsg]);
@@ -3599,12 +3603,15 @@ ${context}`;
 【多輪對話與上下文延續】：
 你具備完整的對話記憶。當使用者針對上一輪提到的文章、主題或問題進行追問（如「對內容評價呢？」、「重點是什麼？」）時，請直接延續先前的文章內容與上下文給予專業解答，絕不可推稱不知道或看不到！
 
-【自主發布 Wiki 原則】：
+【自主發布 Wiki 原則 (嚴格遵循 David888 Wiki Publisher 規範)】：
 - 對於簡短問答、日常問候、簡要查詢，請直接給出清晰簡練的繁體中文回覆。
 - 當使用者提出需要「深入分析」、「研究報告」、「完整教學」、「多步驟方案」、「企劃案」、「架構設計」、「長篇整理」或問題需要多章節、含程式碼、表格、流程圖的詳盡回答時：
-  1. 請務必呼叫 \`publish_to_wiki\` 工具，將完整、格式精美的 Markdown 文章（可善用 [TOC] 目錄、Mermaid 流程圖、比較表格、程式碼區塊、深入段落）發布到 David888 Wiki。
-  2. 同時在工具中提供精闢的重點摘要 (summary)。
-  3. 系統將為使用者自動生成精美的 LINE Flex 卡片，附帶完整文章閱讀連結、2D 簡報模式 (Slides) 與電子書模式 (Book)！
+  1. 請務必呼叫 \`publish_to_wiki\` 工具，將完整、格式精美的 Markdown 文章發布到 David888 Wiki。
+  2. 【鐵律】：Markdown 首行必須直接以 \`# 文章標題\` 開頭（嚴禁在標題前輸出任何寒暄或客套前言），緊接著引言摘要 Blockquote 與 \`[TOC]\` 目錄。
+  3. 可自由運用高階排版語法：\`==螢光標記==\`、\`[color=red]彩色字[/color]\`、代碼行號標籤 \`\`\`js=1 [app.js]\`\`\`、GitHub Alerts \`> [!NOTE]\`、雙欄排版 \`<div class="two-column-layout">\`、註腳 \`[^1]\`、2D 簡報分隔線 \`---\` / \`--\`、或電子書目錄 \`- [章節](/share/id)\`。
+  4. Mermaid 流程圖節點文字務必加雙引號 \`NODE["標籤"]\`。
+  5. 同時在工具中提供精闢的重點摘要 (summary)。
+  6. 系統將為使用者自動生成精美的 LINE Flex 卡片，附帶完整文章閱讀連結、2D 簡報模式 (Slides) 與電子書模式 (Book)！
 - 當使用者需要轉存遠端多媒體或檔案時，可呼叫 \`save_asset_to_888box\` 工具。
 - 當使用者需要繪製圖片時，可呼叫 \`generate_image\` 工具。`;
 
@@ -3634,7 +3641,7 @@ ${context}`;
               },
               markdown_content: {
                 type: 'string',
-                description: '完整的 Markdown 格式文章內容，包含 [TOC] 目錄、標題結構、表格、Mermaid 流程圖、程式碼區塊等豐富排版'
+                description: '完整的 Markdown 格式文章內容，首行必須為 # Title，可包含 [TOC] 目錄、結構段落、表格、Mermaid 流程圖、代碼區塊、雙欄排版等'
               },
               summary: {
                 type: 'string',
@@ -3642,8 +3649,18 @@ ${context}`;
               },
               theme: {
                 type: 'string',
-                enum: ['claude-canvas', 'retro', 'tokyo-night', 'notion-clean', 'botanical', 'terminal'],
+                enum: [
+                  'ayu-light', 'bauhaus', 'botanical', 'catppuccin-latte', 'catppuccin-macchiato',
+                  'claude-canvas', 'green-simple', 'kanagawa', 'neo-brutalism', 'newsprint',
+                  'notion-clean', 'organic', 'playful-geometric', 'professional', 'retro',
+                  'shopify-mint', 'sketch', 'terminal', 'tokyo-night', 'x-ai'
+                ],
                 description: '文章排版風格主題，預設 claude-canvas'
+              },
+              width: {
+                type: 'string',
+                enum: ['100%', '960px', '1200px', '1440px'],
+                description: '閱讀寬度，預設 100%'
               }
             },
             required: ['title', 'markdown_content', 'summary']
@@ -3818,7 +3835,9 @@ ${context}`;
           try {
             const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
             const publishRes = await wikiHelper.publishNote(slug, args.markdown_content, {
-              theme: args.theme || 'claude-canvas'
+              theme: args.theme || 'claude-canvas',
+              width: args.width || '100%',
+              title: args.title
             });
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, args.summary);
             appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);

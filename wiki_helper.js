@@ -11,6 +11,14 @@ const BASE_URL = process.env.WIKI_BASE_URL
 
 const API_BASE_URL = `${BASE_URL}/api`;
 
+// 20 種官方主題完整清單 (與 SKILL.md 同步)
+const THEMES = [
+  'ayu-light', 'bauhaus', 'botanical', 'catppuccin-latte', 'catppuccin-macchiato',
+  'claude-canvas', 'green-simple', 'kanagawa', 'neo-brutalism', 'newsprint',
+  'notion-clean', 'organic', 'playful-geometric', 'professional', 'retro',
+  'shopify-mint', 'sketch', 'terminal', 'tokyo-night', 'x-ai'
+];
+
 /**
  * 輔助函數：將字串轉為安全的 path slug
  */
@@ -31,10 +39,51 @@ function sanitizePath(titleOrPath) {
 }
 
 /**
+ * 規範化 Markdown 文件結構 (嚴格遵循 SKILL.md 第 1 行為 # Title 鐵律)：
+ * 1. 確保首行必定為 Level-1 `# Document Title` (或合法的 YAML Frontmatter)
+ * 2. 徹底剝除標題前的前置寒暄、開場閒聊 (如「好的，這是為您整理的...」)
+ * 3. 確保 [TOC]、執行摘要 Blockquote 緊隨在 # Title 之後
+ */
+function sanitizeMarkdownStructure(markdownText, defaultTitle = '') {
+  if (!markdownText || typeof markdownText !== 'string') {
+    return defaultTitle ? `# ${defaultTitle}\n\n` : '# David888 Wiki 筆記\n\n';
+  }
+
+  let text = markdownText.trim();
+
+  // 若以 YAML frontmatter 開頭 (--- ... ---)，予以保留
+  let frontmatter = '';
+  if (text.startsWith('---')) {
+    const fmEnd = text.indexOf('\n---', 3);
+    if (fmEnd !== -1) {
+      frontmatter = text.slice(0, fmEnd + 4) + '\n\n';
+      text = text.slice(fmEnd + 4).trim();
+    }
+  }
+
+  // 尋找第一個 # Heading
+  const h1Match = text.match(/^#\s+([^\n]+)/m);
+
+  if (h1Match) {
+    const h1Index = text.indexOf(h1Match[0]);
+    if (h1Index > 0) {
+      // 標題前有閒聊前綴（如「好的，這是為您整理的...」），予以自動剝除以符合規範
+      text = text.slice(h1Index).trim();
+    }
+  } else {
+    // 沒有 # 標題，自動在最前端補上 Level-1 # 標題
+    const title = defaultTitle || 'David888 Wiki 筆記';
+    text = `# ${title}\n\n${text}`;
+  }
+
+  return frontmatter + text;
+}
+
+/**
  * 發布或更新 Wiki 筆記
  * @param {string} notePath - 筆記路徑 (如 tech-notes, report-2026)
  * @param {string} markdownText - Markdown 內容
- * @param {Object} options - { theme, isPublic, append, password, width }
+ * @param {Object} options - { theme, isPublic, append, password, width, title }
  */
 async function publishNote(notePath, markdownText, options = {}) {
   const {
@@ -42,14 +91,18 @@ async function publishNote(notePath, markdownText, options = {}) {
     isPublic = true,
     append = false,
     password = '',
-    width = '100%'
+    width = '100%',
+    title = ''
   } = options;
 
-  const cleanPath = sanitizePath(notePath);
+  const cleanPath = sanitizePath(notePath || title);
   const targetUrl = `${API_BASE_URL}/${cleanPath}${append ? '?append=true' : ''}`;
 
+  // 執行 Markdown 文件結構規範化
+  const cleanMarkdown = append ? markdownText : sanitizeMarkdownStructure(markdownText, title || cleanPath);
+
   const payload = {
-    text: markdownText,
+    text: cleanMarkdown,
     public: isPublic,
     theme: theme,
     width: width
@@ -89,6 +142,7 @@ async function publishNote(notePath, markdownText, options = {}) {
     presentUrl: `${shareUrl}/present`,
     bookUrl: `${shareUrl}/book`,
     theme: theme,
+    width: width,
     message: data.msg || 'Saved successfully'
   };
 }
@@ -230,6 +284,102 @@ async function parseUrlToMarkdown(url) {
     };
   }
   throw new Error(json.msg || 'Failed to parse URL to markdown');
+}
+
+/**
+ * 將 Markdown 渲染為 HTML (POST /api/markdown/render)
+ */
+async function renderMarkdown(markdown, options = {}) {
+  const { theme = 'claude-canvas', fullHtml = false } = options;
+  const targetUrl = `${API_BASE_URL}/markdown/render`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown, theme, fullHtml }),
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`Render failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || {};
+}
+
+/**
+ * 提取 Markdown 文件的結構、標題、連結、閱讀時間 (POST /api/markdown/extract)
+ */
+async function extractMarkdown(markdown) {
+  const targetUrl = `${API_BASE_URL}/markdown/extract`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown }),
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`Extract failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || {};
+}
+
+/**
+ * 檢查與自動修復 Markdown 語法問題 (POST /api/markdown/lint)
+ */
+async function lintMarkdown(markdown) {
+  const targetUrl = `${API_BASE_URL}/markdown/lint`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown }),
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`Lint failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || {};
+}
+
+/**
+ * 取得分享頁面的行內註解討論串 (GET /api/shares/:shareId/annotations)
+ */
+async function listAnnotations(shareId) {
+  const targetUrl = `${API_BASE_URL}/shares/${shareId}/annotations`;
+  const res = await fetch(targetUrl, {
+    method: 'GET',
+    headers: { 'Accept': 'application/json' },
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`List annotations failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || [];
+}
+
+/**
+ * 建立行內註解討論串 (POST /api/shares/:shareId/annotations)
+ */
+async function createAnnotation(shareId, annotationData) {
+  const targetUrl = `${API_BASE_URL}/shares/${shareId}/annotations`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(annotationData),
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`Create annotation failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || {};
+}
+
+/**
+ * 回覆行內註解討論串 (POST /api/shares/:shareId/annotations/:threadId/messages)
+ */
+async function replyAnnotation(shareId, threadId, messageData) {
+  const targetUrl = `${API_BASE_URL}/shares/${shareId}/annotations/${threadId}/messages`;
+  const res = await fetch(targetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(messageData),
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`Reply annotation failed HTTP ${res.status}`);
+  const json = await res.json();
+  return json.data || {};
 }
 
 /**
@@ -453,11 +603,19 @@ function extractPseudoWikiCall(text) {
 module.exports = {
   BASE_URL,
   API_BASE_URL,
+  THEMES,
   sanitizePath,
+  sanitizeMarkdownStructure,
   publishNote,
   readNote,
   readWikiUrl,
   parseUrlToMarkdown,
+  renderMarkdown,
+  extractMarkdown,
+  lintMarkdown,
+  listAnnotations,
+  createAnnotation,
+  replyAnnotation,
   formatWikiFlexMessage,
   extractPseudoWikiCall
 };

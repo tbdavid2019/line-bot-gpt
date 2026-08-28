@@ -15,9 +15,20 @@ Whenever any feature, tool, API endpoint, configuration, or bugfix is implemente
 
 ## 📖 2. David888 Wiki AI Publishing Architecture (Wiki 核心架構原則)
 - **Target User**: David888 Wiki is designed **PRIMARILY FOR LLM / AI AGENTS**, NOT for humans to manually type raw Markdown commands in chat.
+- **Mandatory Document Structure Rule (SKILL.md 鐵律)**:
+  - **Line 1 MUST be `# Document Title`**: AI agents MUST output pure Markdown starting immediately with a Level-1 title `# Title` (or optional YAML frontmatter `---`). **NEVER** prefix the article with conversational chatter (e.g. ❌ `好的，這是為您整理的... \n\n# 標題`).
+  - **`> Executive Summary` & `[TOC]`**: Placed immediately AFTER the Level-1 `# Title`.
+- **Extended Markdown Syntax Support**:
+  - **Text Highlighting & Colors**: `==highlighted text==`, `[color=red]red text[/color]`, `[bg=yellow]yellow bg[/bg]`.
+  - **Code Blocks**: Line numbers gutter ```` ```js=1 ````, filename tabs ```` ```js [app.js] ```` with one-click copy.
+  - **GitHub Alerts**: `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`.
+  - **Academic Footnotes & Citations**: Standard `[^1]` with hover popovers, inline `^[inline note]`, Pandoc citations `[@key]`.
+  - **Multi-Column Layouts**: `<div class="two-column-layout">...</div>` & `<div class="three-column-layout">...</div>`.
+  - **Mermaid Guard**: All node labels MUST be in double quotes `NODE["Label"]`; NEVER put unquoted URLs or slashes in brackets `PROXY["/api/proxy"]`.
+- **20 Bundled Themes**: `ayu-light`, `bauhaus`, `botanical`, `catppuccin-latte`, `catppuccin-macchiato`, `claude-canvas`, `green-simple`, `kanagawa`, `neo-brutalism`, `newsprint`, `notion-clean`, `organic`, `playful-geometric`, `professional`, `retro`, `shopify-mint`, `sketch`, `terminal`, `tokyo-night`, `x-ai`.
 - **Agentic Workflow**:
   - When the user requests in-depth analysis, research reports, tutorials, comparisons, architecture docs, business proposals, or complex answers:
-    1. LLM / Agent writes the complete, rich, structured Markdown article (with Title, `[TOC]`, Mermaid flowcharts, tables, code blocks, footnotes).
+    1. LLM / Agent writes the complete, rich, structured Markdown article following the above rules.
     2. LLM / Agent autonomously publishes the article to `wiki.david888.com` via `wikiHelper.publishNote(...)` or the OpenAI tool `publish_to_wiki`.
     3. The LINE reply MUST be a concise, high-level executive summary (150-250 chars) delivered via a rich LINE Flex Message Card.
     4. Provide the user with the 3-in-1 reading experience:

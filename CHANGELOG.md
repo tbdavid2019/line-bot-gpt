@@ -27,7 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automatic URL Pre-Fetching & Context Enrichment**:
   - Automatically detects HTTP/HTTPS URLs (e.g. `wiki.david888.com/share/...`, news, documentation, external links) in user messages.
   - Proactively pre-fetches and injects clean Markdown content directly into prompt context, eliminating LLM tool-calling delay and completely resolving hallucinations ("我看得到" / "我看不到").
-- **David888 Wiki Native Markdown Engine Integration** (`wiki_helper.js` & `search_helper.js`):
+- **David888 Wiki Native Markdown Engine & Publisher Integration** (`wiki_helper.js` & `index.js`):
+  - **Full Alignment with `SKILL.md` (2026 Specification)**:
+    - **Mandatory `# Title` on Line 1 Enforcement**: Automatically strips conversational preamble and conversational chatter from LLM output, strictly ensuring the first line is always a Level-1 title followed by `> Executive Summary` and `[TOC]`.
+    - **20 Bundled Themes**: Full support for all 20 official themes (`ayu-light`, `bauhaus`, `botanical`, `catppuccin-latte`, `catppuccin-macchiato`, `claude-canvas`, `green-simple`, `kanagawa`, `neo-brutalism`, `newsprint`, `notion-clean`, `organic`, `playful-geometric`, `professional`, `retro`, `shopify-mint`, `sketch`, `terminal`, `tokyo-night`, `x-ai`).
+    - **Rich Syntax Actuation**: Highlighting `==highlight==`, colors `[color=red]`, code line numbers ```` ```js=1 ````, tabs ```` ```js [app.js] ````, GitHub alerts `> [!NOTE]`, multi-column layouts `<div class="two-column-layout">`, footnotes `[^1]`, citations, 2D slide decks (`/present`), and Book Mode (`/book`).
+    - **Extended REST API Utilities**: Added `renderMarkdown`, `extractMarkdown`, `lintMarkdown`, `listAnnotations`, `createAnnotation`, and `replyAnnotation`.
   - Added `wikiHelper.readWikiUrl()` supporting full URLs, share links (`/share/<id>`), and note paths.
   - Enhanced `readWebPage()` to natively fetch pure Markdown with `Accept: text/markdown` headers from `wiki.david888.com`, bypassing SPA UI shells.
   - Added `read_wiki_note` OpenAI Function Calling tool.
