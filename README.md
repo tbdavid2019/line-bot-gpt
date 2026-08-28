@@ -413,11 +413,11 @@ In the `.env` file, you need to configure the following environment variables:
 
 ```bash
 # ==============================================================================
-# LLM 核心設定 (主要: nen.com.tw gpt-5.6-luna / 備用: Groq openai/gpt-oss-20b)
+# LLM 核心設定 (主要: Google Gemini 官方 OpenAI 相容端點 / 備用: Groq / nen.com.tw)
 # ==============================================================================
-OPEN_AI_BASE_PATH=https://nen.com.tw/v1
-OPEN_AI_MODEL=gpt-5.6-luna
-OPEN_AI_LINE_SECRET=your_openai_or_nen_api_key
+OPEN_AI_BASE_PATH=https://generativelanguage.googleapis.com/v1beta/openai/
+OPEN_AI_MODEL=gemini-flash-latest
+OPEN_AI_LINE_SECRET=AIzaSy...your_gemini_api_key
 
 # 備用 LLM 設定 (Groq)
 FALLBACK_LLM_BASE_PATH=https://api.groq.com/openai/v1
