@@ -1661,20 +1661,22 @@ async function handleEvent(event) {
 
         const choice = currentCompletion.choices[0];
 
-        let gptResponse = choice.message?.content || choice.message?.reasoning || '';
+        let gptResponse = choice.message?.content || '';
 
         // 若語音處理後仍未生成文字內容，做最終文字回答生成
-        if (!gptResponse && choice.message?.tool_calls) {
-          messages.push(choice.message);
-          for (const t of choice.message.tool_calls) {
-            messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+        if (!gptResponse) {
+          if (choice.message?.tool_calls) {
+            messages.push(choice.message);
+            for (const t of choice.message.tool_calls) {
+              messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+            }
           }
           try {
             const finalComp = await createChatCompletion({
               messages: messages,
               max_tokens: 4000
             });
-            gptResponse = finalComp.choices[0]?.message?.content || finalComp.choices[0]?.message?.reasoning || '';
+            gptResponse = finalComp.choices[0]?.message?.content || '';
           } catch (e) {}
         }
 
@@ -3897,13 +3899,15 @@ ${context}`;
 
     const choice = currentCompletion.choices[0];
 
-    let rawContent = choice.message?.content || choice.message?.reasoning || '';
+    let rawContent = choice.message?.content || '';
 
     // 若最後仍未生成文字內容，補充提示詞強制做最終總結
-    if (!rawContent && choice.message?.tool_calls) {
-      messages.push(choice.message);
-      for (const t of choice.message.tool_calls) {
-        messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+    if (!rawContent) {
+      if (choice.message?.tool_calls) {
+        messages.push(choice.message);
+        for (const t of choice.message.tool_calls) {
+          messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+        }
       }
       try {
         const finalComp = await createChatCompletion({
@@ -3911,7 +3915,7 @@ ${context}`;
           messages: messages,
           max_tokens: 4000
         });
-        rawContent = finalComp.choices[0]?.message?.content || finalComp.choices[0]?.message?.reasoning || '';
+        rawContent = finalComp.choices[0]?.message?.content || '';
       } catch (e) {}
     }
 
