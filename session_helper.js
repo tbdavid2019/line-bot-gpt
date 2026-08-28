@@ -219,12 +219,15 @@ function buildPromptMessages(userId, systemPrompt, currentTurnUserContent) {
   const messages = [{ role: 'system', content: systemPrompt }];
 
   if (sess && sess.messages && sess.messages.length > 0) {
-    // 取得最近 MAX_PROMPT_MESSAGES 則訊息以節省 Token
-    const recentHistory = sess.messages.slice(-MAX_PROMPT_MESSAGES);
+    // 取得最近 6 則訊息以節省 Token，並限制每則歷史文字上限
+    const recentHistory = sess.messages.slice(-6);
     for (const msg of recentHistory) {
+      const trimmedContent = (msg.content && msg.content.length > 500)
+        ? msg.content.slice(0, 500) + '...'
+        : (msg.content || '');
       messages.push({
         role: msg.role,
-        content: msg.content
+        content: trimmedContent
       });
     }
   }

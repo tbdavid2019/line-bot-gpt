@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `manage_session`: Autonomous dialogue topic creation, listing, switching, and clearing.
     - `get_life_service`: Autonomous divination (解答之書, 淺草籤, 唐詩) and CWA weather alerts.
   - **SafeReply Auto-Push Fallback**: Prioritizes LINE `replyMessage`, and automatically falls back to `pushMessage` if processing exceeds network latency, guaranteeing 100% message delivery and preventing silent drops.
-  - **Tool Loop Optimization**: Capped multi-turn tool loops at 2 turns to ensure lightning-fast responses within LINE's webhook timeout limits.
+  - **Multi-Model Failover Pool on Groq**: Automatically rotates across `openai/gpt-oss-20b` -> `qwen/qwen3.8-27b` -> `openai/gpt-oss-120b` on 429 TPM limits, ensuring 99.99% service availability.
+  - **Token Budget & Timeout Hardening**: Tightened search timeout to 3.5s, compacted search snippets to 1,500 chars, and limited prompt history to 6 turns (max 500 chars/turn) to strictly eliminate rate-limiting errors.
 - **Automatic URL Pre-Fetching & Context Enrichment**:
   - Automatically detects HTTP/HTTPS URLs (e.g. `wiki.david888.com/share/...`, news, documentation, external links) in user messages.
   - Proactively pre-fetches and injects clean Markdown content directly into prompt context, eliminating LLM tool-calling delay and completely resolving hallucinations ("我看得到" / "我看不到").

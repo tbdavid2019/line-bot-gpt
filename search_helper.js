@@ -20,7 +20,7 @@ async function searchWeb(query, options = {}) {
   }
 
   const cleanQuery = query.trim();
-  const timeoutMs = options.timeout || 12000;
+  const timeoutMs = options.timeout || 3500;
   let lastError = null;
 
   for (const baseUrl of ENDPOINTS) {
@@ -38,12 +38,11 @@ async function searchWeb(query, options = {}) {
             success: true,
             endpoint: baseUrl,
             query: cleanQuery,
-            content: text.trim()
+            content: text.trim().slice(0, 1500)
           };
         }
       }
     } catch (err) {
-      console.warn(`[search_helper] Endpoint ${baseUrl} search failed: ${err.message}`);
       lastError = err;
     }
   }
@@ -66,7 +65,7 @@ async function readWebPage(targetUrl, options = {}) {
   }
 
   const cleanUrl = targetUrl.trim();
-  const timeoutMs = options.timeout || 20000;
+  const timeoutMs = options.timeout || 4000;
 
   // 1. 若為 David888 Wiki 網址 (wiki.david888.com 或相關別名)，直接使用原生 Markdown 端點抓取完整原文
   const isWikiUrl = /wiki\.(?:david888\.com|glsoft\.ai|aiurl\.tw)/i.test(cleanUrl) || 
@@ -85,12 +84,12 @@ async function readWebPage(targetUrl, options = {}) {
             success: true,
             endpoint: 'David888 Wiki Native Markdown Engine',
             url: cleanUrl,
-            content: text.trim().slice(0, 18000)
+            content: text.trim().slice(0, 8000)
           };
         }
       }
     } catch (wikiErr) {
-      console.warn(`[search_helper] David888 Wiki 原生讀取失敗: ${wikiErr.message}，切換至 2MD 端點...`);
+      console.warn(`[search_helper] David888 Wiki 原生讀取失敗: ${wikiErr.message}`);
     }
   }
 
@@ -114,12 +113,11 @@ async function readWebPage(targetUrl, options = {}) {
             success: true,
             endpoint: baseUrl,
             url: cleanUrl,
-            content: text.trim().slice(0, 18000) // 限制最大長度以節省上下文
+            content: text.trim().slice(0, 3000) // 限制長度以防 token 超限
           };
         }
       }
     } catch (err) {
-      console.warn(`[search_helper] Endpoint ${baseUrl} read URL failed: ${err.message}`);
       lastError = err;
     }
   }

@@ -93,20 +93,28 @@ async function createChatCompletion(params) {
     }
   }
 
-  // 2. 切換至備用端點 (Groq / openai/gpt-oss-120b 高階大模型)
+  // 2. 切換至備用端點 (Groq 多模型自動輪替 Failover 支援)
   if (fallbackLlmClient) {
-    try {
-      const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-120b';
-      console.log(`🤖 使用備用 LLM 端點 (${fallbackModel} @ Groq)...`);
-      const completion = await fallbackLlmClient.chat.completions.create({
-        ...params,
-        model: fallbackModel
-      });
-      return completion;
-    } catch (fallbackErr) {
-      console.error(`❌ 備用 LLM 呼叫失敗: ${fallbackErr.message}`);
-      throw fallbackErr;
+    const candidateModels = [
+      process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b',
+      'qwen/qwen3.8-27b',
+      'openai/gpt-oss-120b'
+    ];
+    let lastError = null;
+    for (const model of candidateModels) {
+      try {
+        console.log(`🤖 使用備用 LLM 端點 (${model} @ Groq)...`);
+        const completion = await fallbackLlmClient.chat.completions.create({
+          ...params,
+          model: model
+        });
+        return completion;
+      } catch (fallbackErr) {
+        console.warn(`⚠️ Groq 模型 [${model}] 呼叫失敗 (${fallbackErr.message})，自動嘗試下一個候選模型...`);
+        lastError = fallbackErr;
+      }
     }
+    if (lastError) throw lastError;
   }
 
   throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / FALLBACK_LLM_KEY)');
@@ -1655,7 +1663,22 @@ async function handleEvent(event) {
 
         const choice = currentCompletion.choices[0];
 
-        let gptResponse = choice.message?.content || '';
+        let gptResponse = choice.message?.content || choice.message?.reasoning || '';
+
+        // 若語音處理後仍未生成文字內容，做最終文字回答生成
+        if (!gptResponse && choice.message?.tool_calls) {
+          messages.push(choice.message);
+          for (const t of choice.message.tool_calls) {
+            messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+          }
+          try {
+            const finalComp = await createChatCompletion({
+              messages: messages,
+              max_tokens: 4000
+            });
+            gptResponse = finalComp.choices[0]?.message?.content || finalComp.choices[0]?.message?.reasoning || '';
+          } catch (e) {}
+        }
 
         // 攔截偽 Tool Call
         const pseudoCall = wikiHelper.extractPseudoWikiCall(gptResponse);
@@ -3878,7 +3901,23 @@ ${context}`;
 
     const choice = currentCompletion.choices[0];
 
-    let rawContent = choice.message?.content || '';
+    let rawContent = choice.message?.content || choice.message?.reasoning || '';
+
+    // 若最後仍未生成文字內容，補充提示詞強制做最終總結
+    if (!rawContent && choice.message?.tool_calls) {
+      messages.push(choice.message);
+      for (const t of choice.message.tool_calls) {
+        messages.push({ role: 'tool', tool_call_id: t.id, content: '檢索已完成，請直接輸出繁體中文詳細回答。' });
+      }
+      try {
+        const finalComp = await createChatCompletion({
+          temperature: 0.7,
+          messages: messages,
+          max_tokens: 4000
+        });
+        rawContent = finalComp.choices[0]?.message?.content || finalComp.choices[0]?.message?.reasoning || '';
+      } catch (e) {}
+    }
 
     // 2. 第二道防線：攔截偽 Tool Call 指令 (如 [CALL:/wiki ...], [CALL:wiki ...], <tool_call> 等)
     const pseudoCall = wikiHelper.extractPseudoWikiCall(rawContent);
