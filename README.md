@@ -51,9 +51,15 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 ## 功能 (Features)
 
 - 🤖 **LLM 自主長文發布引擎 (David888 Wiki)**：當使用者要求深入分析、研究報告、系統架構或完整教學時，LLM 自主生成完整 Markdown 文章發布至 Wiki，並回傳摘要與 3 合 1 閱讀模式（網頁、2D 簡報、電子書）
+- 🗂️ **現代化 Session 多話題管理與 7 天長效持久化記憶 (`session_helper.js`)**：
+  - 🔄 **7 天自動話題生命週期**：7 天內對話脈絡持續延續，超過 7 天未發言則背景自動開啟全新話題 Session。
+  - 💾 **磁碟原子持久化 (`./data/sessions.json`)**：伺服器重啟或 Docker / Watchtower 自動部署皆不遺失歷史話題。
+  - ⚡ **話題管理指令**：支援 `/new`（開啟新話題）、`/sessions`（瀏覽歷史話題）、`/session <id>`（切換話題）、`/clear`（清空當前記憶）。
+- 🧠 **網址自動預先解析與零延遲注入 (Smart URL Pre-Fetching)**：主動偵測訊息中的外部連結與 Wiki 分享文章，自動直抓純淨 Markdown 內文注入上下文，杜絕 AI 幻覺
+- 🌐 **2MD 即時聯網搜尋與網頁解析 (SERP & Web Reader)**：三端點高可用容錯（Primary: `2md.aiurl.tw`，Fallback: `2md.glsoft.ai`, `create360.ai`），支援 OpenAI Tool Calling (`search_web`, `read_web_page`, `read_wiki_note`)
 - 📦 **888box 雲端多媒體資產庫**：三端點高可用容錯（Primary: `box.david888.com`，Fallback: `box.glsoft.ai`, `box.aiurl.tw`），支援 AI 圖片/影片/檔案自動 CDN 存儲與 Podcast 訂閱
-- 整合 OpenAI GPT-4o 聊天機器人（具備 Tool Calling 擴充工具）
-- 整合 Google Gemini 2.5 Flash AI 視覺功能
+- 整合 OpenAI 相容端點與 Groq `openai/gpt-oss-120b` 高階模型（具備多輪 Agentic Tool Execution Loop）
+- 整合 Google Gemini 2.5/3.1 Flash AI 視覺功能
   - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
   - ✏️ **圖片編輯**：基於現有圖片進行 AI 編輯
   - 🎨 **文字生成圖片**：從文字描述生成全新圖片（自動上傳 888box CloudFront CDN）
@@ -136,6 +142,27 @@ Bot: 🎤 您說：「講個笑話」
      
      從前從前有一隻程式設計師...
 ```
+
+### 🗂️ 現代化 Session 多話題管理與 7 天持久化記憶 (Session Architecture)
+
+> [!TIP]
+> **支援獨立話題 Session、7 天記憶持續與磁碟持久化！**
+> 告別死板的單次無記憶設計，每個使用者擁有獨立的多話題 Session 檔案（存儲於 `./data/sessions.json`），即使伺服器重啟或自動發布更新，記憶也不會遺失！
+
+#### 💬 核心運作機制：
+1. **7 天自動話題生命週期**：您在 7 天內的每一次發言（文字、語音、網址分析）都會持續累積在同一個話題中，隨時可以自然追問（例如「那第二點呢？」、「這篇寫得好不好？」）。
+2. **7 天閒置自動歸檔**：若您超過 7 天未與機器人交談，系統會在您下一次傳送訊息時自動開啟全新 Session，避免過期話題干擾。
+3. **智慧上下文壓縮 (Token Compaction)**：系統自動保持最近 16 輪對話與網址內文，兼顧長效記憶與模型 Token 最優化。
+
+#### ⚡ 話題管理指令表：
+| 指令 | 說明 | 範例 |
+| :--- | :--- | :--- |
+| `/new` 或 `!new` | **立即開啟全新話題 Session**（發送清爽 Flex 提示卡片） | `/new` 或 `開啟新話題` |
+| `/sessions` 或 `!sessions` | **列出您的歷史話題清單**（含標題、訊息數、時間與切換按鈕） | `/sessions` 或 `查看話題` |
+| `/session <id>` | **切換回指定的歷史話題**，繼續未完的討論 | `/session sess_xxxx` |
+| `/clear` 或 `!clear` | **清空當前話題的歷史訊息**（保留話題 ID） | `/clear` 或 `清除記憶` |
+
+---
 
 ### 🌐 2MD 即時聯網搜尋與網頁解析 (Real-Time SERP & Web Reader)
 

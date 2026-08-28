@@ -41,6 +41,11 @@ tmp/
 # Docker
 .dockerignore
 
+# 資料與 Session
+data/*.json
+data/*.tmp
+!data/.gitkeep
+
 #GCP
 service-account-key.json
 大同食譜.py

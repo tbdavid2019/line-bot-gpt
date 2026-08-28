@@ -16,6 +16,8 @@ const Groq = require('groq-sdk')
 const boxHelper = require('./box_helper')
 const wikiHelper = require('./wiki_helper')
 const searchHelper = require('./search_helper')
+const sessionHelper = require('./session_helper')
+const servicesHelper = require('./services_helper')
 
 
 // 輔助函數：從 MIME 類型取得檔案副檔名
@@ -55,7 +57,7 @@ const openai = primaryLlmClient || fallbackLlmClient;
 
 // 統一 LLM Chat Completion 呼叫函數（具備自動 Failover）
 async function createChatCompletion(params) {
-  // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna)
+  // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna / deepseek-v4-flash)
   if (primaryLlmClient) {
     try {
       const primaryModel = process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
@@ -69,10 +71,10 @@ async function createChatCompletion(params) {
     }
   }
 
-  // 2. 切換至備用端點 (Groq / openai/gpt-oss-20b)
+  // 2. 切換至備用端點 (Groq / openai/gpt-oss-120b 高階大模型)
   if (fallbackLlmClient) {
     try {
-      const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b';
+      const fallbackModel = process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-120b';
       console.log(`🤖 使用備用 LLM 端點 (${fallbackModel} @ Groq)...`);
       const completion = await fallbackLlmClient.chat.completions.create({
         ...params,
@@ -86,6 +88,22 @@ async function createChatCompletion(params) {
   }
 
   throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / FALLBACK_LLM_KEY)');
+}
+
+// 用戶多輪對話歷史記憶 (由 sessionHelper 提供 7 天長效 Session 與磁碟持久化)
+function getUserHistory(userId) {
+  const sess = sessionHelper.getOrCreateActiveSession(userId);
+  return sess ? (sess.messages || []) : [];
+}
+
+function appendUserHistory(userId, userMsg, assistantMsg) {
+  if (!userId) return;
+  if (userMsg) {
+    sessionHelper.appendMessageToSession(userId, 'user', userMsg);
+  }
+  if (assistantMsg) {
+    sessionHelper.appendMessageToSession(userId, 'assistant', assistantMsg);
+  }
 }
 
 // 初始化 Google Cloud Storage 客戶端
@@ -994,50 +1012,51 @@ async function uploadImageToLine(buffer, mimeType) {
   }
 }
 
-// 檢查是否為圖片生成指令
+// 檢查是否為圖片生成指令 (支援 產圖, 生圖, 畫圖, 繪圖, !產圖, !image, 全形/半形空白等)
 function isImageGenerationCommand(text) {
-  const imageCommands = ['!image', '!畫圖', '!img', '!圖片', '!產圖'];
-  const imageKeywords = ['畫圖', 'image', '幫我產生圖', '生成圖片', '產生圖片', '畫一張', '畫一個', '生成一張'];
+  if (!text || typeof text !== 'string') return false;
+  const normalized = text.replace(/[\u3000\s]+/g, ' ').trim().toLowerCase();
 
-  // 檢查指令驅動
-  const hasCommand = imageCommands.some(cmd => text.toLowerCase().startsWith(cmd.toLowerCase()));
+  // 1. 檢查指令與自然語言前綴
+  const prefixes = [
+    '!image', '!畫圖', '!img', '!圖片', '!產圖', '!生圖', '!繪圖',
+    '/image', '/畫圖', '/img', '/圖片', '/產圖', '/生圖', '/繪圖',
+    '產圖', '生圖', '畫圖', '繪圖', '製圖', '生成圖片', '產生圖片', '幫我畫', '幫我產圖', '幫我生圖', '畫一張', '畫一個', '生一張', '產一張', '繪製'
+  ];
 
-  // 檢查自然語言驅動
-  const hasKeyword = imageKeywords.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()));
+  for (const p of prefixes) {
+    if (normalized.startsWith(p)) {
+      return true;
+    }
+  }
 
-  return hasCommand || hasKeyword;
+  // 2. 檢查關鍵字包含
+  const keywords = ['畫圖', '產圖', '生圖', '幫我產生圖', '生成圖片', '產生圖片', '畫一張', '畫一個', '生成一張', '生一張', '幫我畫'];
+  return keywords.some(k => normalized.includes(k));
 }
 
 // 提取圖片生成提示詞
 function extractImagePrompt(text) {
-  const imageCommands = ['!image', '!畫圖', '!img', '!圖片', '!產圖'];
+  if (!text || typeof text !== 'string') return '';
+  let cleaned = text.replace(/[\u3000\s]+/g, ' ').trim();
 
-  // 如果是指令驅動，移除指令部分
-  for (const cmd of imageCommands) {
-    if (text.toLowerCase().startsWith(cmd.toLowerCase())) {
-      return text.substring(cmd.length).trim();
+  const prefixes = [
+    '!image', '!畫圖', '!img', '!圖片', '!產圖', '!生圖', '!繪圖',
+    '/image', '/畫圖', '/img', '/圖片', '/產圖', '/生圖', '/繪圖',
+    '幫我產生圖片', '幫我生成圖片', '幫我產生圖', '幫我生成圖', '幫我產圖', '幫我生圖', '幫我畫一張', '幫我畫一個', '幫我畫',
+    '生成一張圖片', '產生一張圖片', '生成一張', '產生一張', '生成圖片', '產生圖片', '繪製圖片', '繪製一張',
+    '產圖', '生圖', '畫圖', '繪圖', 'image', 'img', '圖片'
+  ];
+
+  for (const p of prefixes) {
+    const reg = new RegExp('^' + p + '[:：\\s]*', 'i');
+    if (reg.test(cleaned)) {
+      cleaned = cleaned.replace(reg, '').trim();
+      break;
     }
   }
 
-  // 如果是自然語言驅動，提取相關內容
-  const imageKeywords = ['畫圖', 'image', '幫我產生圖', '生成圖片', '產生圖片', '畫一張', '畫一個', '生成一張'];
-
-  for (const keyword of imageKeywords) {
-    const index = text.toLowerCase().indexOf(keyword.toLowerCase());
-    if (index !== -1) {
-      // 提取關鍵字後面的內容作為提示詞
-      const afterKeyword = text.substring(index + keyword.length).trim();
-      if (afterKeyword) {
-        return afterKeyword;
-      } else {
-        // 如果關鍵字後面沒有內容，提取關鍵字前面的內容
-        const beforeKeyword = text.substring(0, index).trim();
-        return beforeKeyword || text;
-      }
-    }
-  }
-
-  return text;
+  return cleaned || text.trim();
 }
 
 // create Express app
@@ -1396,20 +1415,28 @@ async function handleEvent(event) {
 
         console.log(`✅ 音訊轉錄成功: "${transcription}"`);
 
-        // 將轉錄文字送給 GPT 處理
+        // 將轉錄文字送給 GPT 處理 (包含多輪對話歷史記憶)
         const systemPrompt = `你是一個專業、智慧且友善的繁體中文 AI 助手。
+【系統功能與指令知識庫】：
+當使用者詢問功能、指令或如何使用時，請清楚向使用者介紹：
+1. 話題記憶：!new 開啟新話題（7天長效記憶）、!sessions 查看歷史話題清單、!clear 清空記憶。
+2. AI 繪圖：說「產圖 <描述>」或「生圖 <描述>」自動生成圖片。
+3. 即時聯網：可直接問今日即時新聞、天氣、即時股價，或用 !search <關鍵字>、!read <網址>。
+4. David888 Wiki：深度分析自動生成 3 合 1 閱讀連結（網頁/簡報/電子書）。
+5. 888box 雲端與生活服務：!box 轉存與 Podcast、解答之書、淺草籤、食譜。輸入「說明」或 !help 可隨時打開完整圖文選單。
+
 【即時聯網與零幻覺鐵律 (MANDATORY)】：
-你具備即時瀏覽網路與搜尋即時資料的能力 (search_web 與 read_web_page 工具)。
+你具備即時瀏覽網路與搜尋即時資料的能力 (search_web, read_web_page, read_wiki_note 工具)。
 嚴禁推託說「我無法取得即時資料」或「我無法查詢即時天氣/股價」！
 當使用者詢問即時天氣、今日股價、最新新聞或實時資訊時，你必須主動呼叫 search_web 搜尋即時資料，再根據搜尋結果給出精確回答。
+
+【多輪對話與上下文延續】：
+你具備完整的對話記憶。當使用者針對上一輪提到的話題或問題進行語音追問時，請直接延續先前的上下文給予專業解答！
 
 【自主發布 Wiki 原則】：
 當使用者提出長篇、深度分析、教學或報告需求時，請呼叫 publish_to_wiki 工具發布完整 Markdown 文章，並提供摘要。`;
 
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: transcription }
-        ];
+        const messages = sessionHelper.buildPromptMessages(userId, systemPrompt, transcription);
 
         const audioTools = [
           ...searchHelper.searchTools,
@@ -1427,6 +1454,38 @@ async function handleEvent(event) {
                   summary: { type: 'string', description: '精華摘要' }
                 },
                 required: ['title', 'markdown_content', 'summary']
+              }
+            }
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'generate_image',
+              description: '當使用者用語音要求畫圖、生圖、產圖或創作圖片時呼叫此工具',
+              parameters: {
+                type: 'object',
+                properties: {
+                  prompt: { type: 'string', description: '圖片生成提示詞' }
+                },
+                required: ['prompt']
+              }
+            }
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'get_life_service',
+              description: '當使用者詢問解答之書、淺草籤、唐詩、天氣特報時呼叫此工具',
+              parameters: {
+                type: 'object',
+                properties: {
+                  service: {
+                    type: 'string',
+                    enum: ['answer_book', 'temple_oracle', 'tang_poetry', 'weather_alerts'],
+                    description: '服務類型'
+                  }
+                },
+                required: ['service']
               }
             }
           }
@@ -1479,11 +1538,30 @@ async function handleEvent(event) {
                 tool_call_id: toolCall.id,
                 content: toolContent
               });
+            } else if (fnName === 'read_wiki_note') {
+              try {
+                const wRes = await wikiHelper.readWikiUrl(args.url_or_slug, args.password);
+                const toolContent = wRes.success
+                  ? `David888 Wiki 筆記 [${args.url_or_slug}] 的完整 Markdown 內容:\n\n${wRes.markdown}`
+                  : `讀取 Wiki 筆記失敗: ${wRes.error}`;
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: toolContent
+                });
+              } catch (wErr) {
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: `讀取 Wiki 筆記失敗: ${wErr.message}`
+                });
+              }
             } else if (fnName === 'publish_to_wiki') {
               try {
                 const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
                 const publishRes = await wikiHelper.publishNote(slug, args.markdown_content);
                 const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, `🎤 您說：「${transcription}」\n\n${args.summary}`);
+                appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);
                 return client.replyMessage(event.replyToken, [flexMsg]);
               } catch (wikiErr) {
                 console.error('語音 Tool 發布 Wiki 失敗:', wikiErr);
@@ -1492,6 +1570,38 @@ async function handleEvent(event) {
                   tool_call_id: toolCall.id,
                   content: `發布 Wiki 失敗: ${wikiErr.message}`
                 });
+              }
+            } else if (fnName === 'generate_image') {
+              try {
+                await showLoadingAnimation(userId, 60);
+                await generateImageWithGeminiPush(args.prompt, event.source, userId);
+                appendUserHistory(userId, transcription, `[語音生成圖片：「${args.prompt}」]`);
+                return Promise.resolve(null);
+              } catch (imgErr) {
+                console.error('語音 Tool 生成圖片失敗:', imgErr);
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  content: `圖片生成失敗: ${imgErr.message}`
+                });
+              }
+            } else if (fnName === 'get_life_service') {
+              try {
+                if (args.service === 'answer_book') {
+                  const res = await servicesHelper.getAnswerBook();
+                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                } else if (args.service === 'temple_oracle') {
+                  const res = await servicesHelper.getTempleOracle();
+                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                } else if (args.service === 'tang_poetry') {
+                  const res = await servicesHelper.getTangPoetry();
+                  if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+                } else if (args.service === 'weather_alerts') {
+                  const res = await servicesHelper.getWeatherAlerts();
+                  if (res.success) return client.replyMessage(event.replyToken, [{ type: 'text', text: `🎤 語音查詢天氣特報：\n\n${res.summary}` }]);
+                }
+              } catch (servErr) {
+                console.error('語音 Tool get_life_service 失敗:', servErr);
               }
             }
           }
@@ -1517,6 +1627,7 @@ async function handleEvent(event) {
             const publishRes = await wikiHelper.publishNote(slug, pseudoCall.content);
             const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, `🎤 您說：「${transcription}」\n\n${summary}`);
+            appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (wikiErr) {
             console.error('語音偽 Tool Call 發布失敗:', wikiErr);
@@ -1530,15 +1641,18 @@ async function handleEvent(event) {
             const publishRes = await wikiHelper.publishNote(slug, gptResponse);
             const summary = gptResponse.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, transcription.slice(0, 30), `🎤 您說：「${transcription}」\n\n${summary}`);
+            appendUserHistory(userId, transcription, `[語音發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (wikiErr) {}
         }
 
         // 清理殘留標籤並回覆
         const cleanedText = gptResponse.replace(/\[(?:CALL:\/?\w+|TOOL_CALL:\w+)[^\]]*\]/gi, '').trim();
+        const replyText = cleanedText || gptResponse;
+        appendUserHistory(userId, transcription, replyText);
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: `🎤 您說：「${transcription}」\n\n${cleanedText || gptResponse}`
+          text: `🎤 您說：「${transcription}」\n\n${replyText}`
         });
 
       } catch (error) {
@@ -2344,6 +2458,72 @@ ${context}`;
           text: '💡 請輸入完整的網址，例如：\n!box https://example.com/video.mp4\n!轉存 https://example.com/image.jpg'
         });
       }
+    }
+
+    // ==============================================================================
+    // 現代化 Session 多輪對話記憶與話題管理指令 (/new, /sessions, /session <id>, /clear)
+    // ==============================================================================
+    const trimmedInput = userInput.trim();
+
+    // 1. 開啟新話題 Session: /new 或 !new
+    const isNewSessionCommand = /^(\/new|!new|\/session\s+new|開啟新話題|新話題|新對話|新開話題|開啟新對話)$/i.test(trimmedInput);
+    if (isNewSessionCommand) {
+      const newSess = sessionHelper.startNewSession(userId);
+      userStates.delete(userId);
+      const flexCard = sessionHelper.formatNewSessionFlex(newSess);
+      return client.replyMessage(event.replyToken, [flexCard]);
+    }
+
+    // 2. 查看話題歷史清單: /sessions 或 !sessions
+    const isListSessionsCommand = /^(\/sessions|!sessions|\/session\s+list|\/topics|查看話題|歷史話題|話題清單|話題列表|對話話題)$/i.test(trimmedInput);
+    if (isListSessionsCommand) {
+      const sessions = sessionHelper.listUserSessions(userId);
+      const currentSess = sessionHelper.getOrCreateActiveSession(userId);
+      if (!sessions || sessions.length === 0) {
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '📚 目前尚無歷史話題紀錄。發送任何訊息即可自動開始新話題！'
+        });
+      }
+      const flexCard = sessionHelper.formatSessionsListFlex(userId, sessions, currentSess.id);
+      return client.replyMessage(event.replyToken, [flexCard]);
+    }
+
+    // 3. 切換至指定話題: /session <id> 或 !session <id>
+    const switchMatch = trimmedInput.match(/^(\/session|!session|切換話題)\s+([^\s]+)$/i);
+    if (switchMatch && switchMatch[2].toLowerCase() !== 'new' && switchMatch[2].toLowerCase() !== 'list') {
+      const targetId = switchMatch[2];
+      const res = sessionHelper.switchSession(userId, targetId);
+      if (res.success) {
+        const flexCard = sessionHelper.formatNewSessionFlex(res.session);
+        return client.replyMessage(event.replyToken, [
+          { type: 'text', text: `✅ ${res.message}` },
+          flexCard
+        ]);
+      } else {
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `❌ ${res.message}`
+        });
+      }
+    }
+
+    // 4. 清除當前話題記憶: /clear 或 !clear 或 !reset
+    const isResetCommand = /^(\/clear|!clear|!reset|!忘記|!清除記憶|!重置|清除記憶|重置對話|清空當前對話)$/i.test(trimmedInput);
+    if (isResetCommand) {
+      sessionHelper.clearCurrentSession(userId);
+      userStates.delete(userId);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '🧹 已成功清除當前話題的對話記憶！話題 ID 維持不變，現在讓我們開始全新的話題吧。\n（若要完全開立新話題，請發送 !new 或「開啟新對話」）'
+      });
+    }
+
+    // 5. 全域功能說明與互動指令選單: !help / 說明 / 使用說明 / 功能 / 選單
+    const isHelpCommand = /^(!help|help|!說明|說明|使用說明|功能清單|功能列表|指令|選單|menu|\/help|\/start)$/i.test(trimmedInput);
+    if (isHelpCommand) {
+      const helpFlex = sessionHelper.formatGlobalHelpFlex();
+      return client.replyMessage(event.replyToken, [helpFlex]);
     }
 
     // David888 Wiki 筆記發布 / 閱讀 / 網頁轉文章指令
@@ -3261,17 +3441,68 @@ ${context}`;
     // 顯示 Loading Indicator (最長 30 秒)
     await showLoadingAnimation(userId, 30);
 
+    // 0. 自動網址偵測與即時預先抓取 (URL Pre-fetching)
+    // 若使用者訊息含有 URL (特別是 wiki.david888.com 或一般文章網頁)，主動預先抓取並注入上下文，杜絕模型未呼叫工具或產生幻覺
+    const detectedUrls = userInput.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+    let autoFetchedContext = '';
+    if (detectedUrls.length > 0) {
+      console.log(`🌐 偵測到使用者訊息包含 ${detectedUrls.length} 個網址，啟動預先解析...`, detectedUrls);
+      for (const rawUrl of detectedUrls) {
+        try {
+          const isWiki = /wiki\.(?:david888\.com|glsoft\.ai|aiurl\.tw)/i.test(rawUrl) || 
+                         (process.env.WIKI_BASE_URL && rawUrl.startsWith(process.env.WIKI_BASE_URL.replace(/\/+$/, '')));
+          let fetchedContent = '';
+          if (isWiki) {
+            const wRes = await wikiHelper.readWikiUrl(rawUrl);
+            if (wRes.success && wRes.markdown) {
+              fetchedContent = wRes.markdown;
+            }
+          } else {
+            const webRes = await searchHelper.readWebPage(rawUrl);
+            if (webRes.success && webRes.content) {
+              fetchedContent = webRes.content;
+            }
+          }
+          if (fetchedContent) {
+            autoFetchedContext += `\n\n【系統已即時預先讀取之網址內容 (${rawUrl})】：\n${fetchedContent.slice(0, 15000)}\n`;
+          }
+        } catch (fetchErr) {
+          console.warn(`[URL Auto-fetch] 讀取 ${rawUrl} 失敗:`, fetchErr.message);
+        }
+      }
+    }
+
     const systemPrompt = `你是一個專業、智慧、博學且友善的繁體中文 AI 助理。
 
-【即時聯網與零幻覺鐵律 (MANDATORY)】：
-你具備即時瀏覽網路與搜尋即時資料的能力 (search_web 與 read_web_page 工具)。
-嚴禁推託說「我無法取得即時資料」或「我無法查詢即時天氣/股價」！
-當使用者詢問：
-1. 即時天氣、降雨機率、氣溫、紫外線等氣象資訊（例如「高雄鼓山天氣」、「台北今日氣溫」）
-2. 即時股票行情、台股/美股最新報價、加密貨幣實時價格（例如「台積電 股價」、「NVDA 股價」）
-3. 最新新聞、今日事件、體育賽事即時比分
-4. 特定網址內容、公司最新動態、政策法規更新
-你必須主動呼叫 search_web 搜尋即時資料，再根據搜尋結果給出精確回答！若需要閱讀特定網址詳細內文，可呼叫 read_web_page。
+【系統完整功能與指令知識庫 (當使用者詢問功能、指令、你能做什麼或請求說明時，請主動條理分明地介紹)】：
+1. 💬 話題記憶與管理 (Session 架構)：
+   - !new 或「開啟新對話」：開立全新獨立話題 Session（7天內自動持續長效記憶）。
+   - !sessions 或「查看話題」：查看歷史話題清單並可一鍵切換上下文。
+   - !clear 或「清除記憶」：清空當前話題訊息。
+2. 🎨 AI 圖片創作與修圖：
+   - 使用者發送「產圖 <描述>」、「生圖 <描述>」或「幫我畫 <描述>」即可生成高畫質圖片並上傳 888box CDN。
+   - 上傳圖片可直接進行 AI 視覺分析或修圖。
+3. 🌐 2MD 即時聯網搜尋與網頁解析：
+   - 直接查詢即時天氣、今日即時股價、最新新聞。
+   - 手動指令：!search <關鍵字>、!read <網址>（將網頁轉為 Markdown）。
+4. 📖 David888 Wiki 知識庫 (3 合 1 閱讀體驗)：
+   - 當使用者要求深入分析、研究報告、教學或企劃時，自主發布至 Wiki 並回傳專屬網頁、2D 簡報、電子書閱讀連結。
+   - 手動指令：!wiki、!wiki read <slug>。
+5. 📦 888box 雲端多媒體與 Podcast：
+   - 指令：!box、!888box（轉存遠端檔案、自動生成 Podcast 訂閱源）。
+6. 🔮 生活占卜與實用工具：
+   - 解答之書、淺草籤、奇門遁甲、天氣特報、找附近設施、大同食譜、線上工具。
+   - 輸入「說明」或「!help」可隨時打開完整圖文互動選單。
+
+【即時聯網、網址讀取與零幻覺鐵律 (MANDATORY)】：
+你具備即時瀏覽網路與讀取網頁內容的能力 (search_web, read_web_page, read_wiki_note 工具)。
+嚴禁推託說「我無法取得即時資料」或「我無法訪問外部連結」！
+1. 當使用者訊息中附有網址（例如 David888 Wiki 筆記或一般網頁）時，系統通常已自動為你即時預先讀取完整內文並附加於訊息下方（標註為【系統已即時預先讀取之網址內容】）。你必須依據該完整內容為使用者進行深入、精準、具體的分析與評價！
+2. 若系統尚未預讀或需要更多資訊，你必須主動呼叫 read_wiki_note 或 read_web_page 讀取目標連結。
+3. 查詢天氣、股價、新聞、賽事時，必須主動呼叫 search_web 搜尋即時資料。
+
+【多輪對話與上下文延續】：
+你具備完整的對話記憶。當使用者針對上一輪提到的文章、主題或問題進行追問（如「對內容評價呢？」、「重點是什麼？」）時，請直接延續先前的文章內容與上下文給予專業解答，絕不可推稱不知道或看不到！
 
 【自主發布 Wiki 原則】：
 - 對於簡短問答、日常問候、簡要查詢，請直接給出清晰簡練的繁體中文回覆。
@@ -3279,12 +3510,14 @@ ${context}`;
   1. 請務必呼叫 \`publish_to_wiki\` 工具，將完整、格式精美的 Markdown 文章（可善用 [TOC] 目錄、Mermaid 流程圖、比較表格、程式碼區塊、深入段落）發布到 David888 Wiki。
   2. 同時在工具中提供精闢的重點摘要 (summary)。
   3. 系統將為使用者自動生成精美的 LINE Flex 卡片，附帶完整文章閱讀連結、2D 簡報模式 (Slides) 與電子書模式 (Book)！
-- 當使用者需要轉存遠端多媒體或檔案時，可呼叫 \`save_asset_to_888box\` 工具。`;
+- 當使用者需要轉存遠端多媒體或檔案時，可呼叫 \`save_asset_to_888box\` 工具。
+- 當使用者需要繪製圖片時，可呼叫 \`generate_image\` 工具。`;
 
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userInput },
-    ];
+    const userPromptContent = autoFetchedContext 
+      ? `${userInput}\n${autoFetchedContext}` 
+      : userInput;
+
+    const messages = sessionHelper.buildPromptMessages(userId, systemPrompt, userPromptContent);
 
     const tools = [
       ...searchHelper.searchTools,
@@ -3342,6 +3575,67 @@ ${context}`;
             required: ['url']
           }
         }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'generate_image',
+          description: '當使用者要求生成、繪製、產圖或創作圖片時呼叫此工具',
+          parameters: {
+            type: 'object',
+            properties: {
+              prompt: {
+                type: 'string',
+                description: '要生成圖片的詳細英文或繁體中文視覺提示詞'
+              }
+            },
+            required: ['prompt']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'manage_session',
+          description: '當使用者要求開啟新話題/新對話、查看歷史話題清單、切換話題或清空對話記憶時呼叫此工具',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: {
+                type: 'string',
+                enum: ['new', 'list', 'clear', 'switch'],
+                description: '操作類型：new(新話題), list(查看話題清單), clear(清空記憶), switch(切換話題)'
+              },
+              target_session_id: {
+                type: 'string',
+                description: '當 action 為 switch 時指定的話題 ID'
+              },
+              topic_title: {
+                type: 'string',
+                description: '當 action 為 new 時可自訂的話題標題'
+              }
+            },
+            required: ['action']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'get_life_service',
+          description: '當使用者要求翻解答之書、抽日本淺草籤、求唐詩推薦、或查詢台灣中央氣象署天氣特報時呼叫此工具',
+          parameters: {
+            type: 'object',
+            properties: {
+              service: {
+                type: 'string',
+                enum: ['answer_book', 'temple_oracle', 'tang_poetry', 'weather_alerts'],
+                description: '服務類型：answer_book(解答之書), temple_oracle(淺草籤), tang_poetry(唐詩), weather_alerts(天氣特報)'
+              }
+            },
+            required: ['service']
+          }
+        }
       }
     ];
 
@@ -3393,6 +3687,24 @@ ${context}`;
             tool_call_id: toolCall.id,
             content: toolContent
           });
+        } else if (fnName === 'read_wiki_note') {
+          try {
+            const wRes = await wikiHelper.readWikiUrl(args.url_or_slug, args.password);
+            const toolContent = wRes.success
+              ? `David888 Wiki 筆記 [${args.url_or_slug}] 的完整 Markdown 內容:\n\n${wRes.markdown}`
+              : `讀取 Wiki 筆記失敗: ${wRes.error}`;
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: toolContent
+            });
+          } catch (wErr) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `讀取 Wiki 筆記失敗: ${wErr.message}`
+            });
+          }
         } else if (fnName === 'publish_to_wiki') {
           try {
             const slug = wikiHelper.sanitizePath(args.path_slug || args.title);
@@ -3400,6 +3712,7 @@ ${context}`;
               theme: args.theme || 'claude-canvas'
             });
             const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, args.title, args.summary);
+            appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${args.summary || args.title}`);
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (wikiErr) {
             console.error('Tool 呼叫發布 Wiki 失敗:', wikiErr);
@@ -3413,6 +3726,7 @@ ${context}`;
           try {
             const result = await boxHelper.uploadFromUrl(args.url, { title: args.title || '雲端資產' });
             const flexMsg = boxHelper.formatAssetFlexMessage(result);
+            appendUserHistory(userId, userInput, `[已轉存 888box 資產: ${result.url}] ${args.title || ''}`);
             return client.replyMessage(event.replyToken, [flexMsg]);
           } catch (boxErr) {
             console.error('Tool 呼叫 888box 轉存失敗:', boxErr);
@@ -3420,6 +3734,72 @@ ${context}`;
               role: 'tool',
               tool_call_id: toolCall.id,
               content: `轉存 888box 失敗: ${boxErr.message}`
+            });
+          }
+        } else if (fnName === 'generate_image') {
+          try {
+            await showLoadingAnimation(userId, 60);
+            await generateImageWithGeminiPush(args.prompt, event.source, userId);
+            appendUserHistory(userId, userInput, `[已生成圖片：「${args.prompt}」]`);
+            return Promise.resolve(null);
+          } catch (imgErr) {
+            console.error('Tool 呼叫圖片生成失敗:', imgErr);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `圖片生成失敗: ${imgErr.message}`
+            });
+          }
+        } else if (fnName === 'manage_session') {
+          try {
+            if (args.action === 'new') {
+              const newSess = sessionHelper.startNewSession(userId, args.topic_title || '');
+              const flexCard = sessionHelper.formatNewSessionFlex(newSess);
+              return client.replyMessage(event.replyToken, [flexCard]);
+            } else if (args.action === 'list') {
+              const sessions = sessionHelper.listUserSessions(userId);
+              const currentSess = sessionHelper.getOrCreateActiveSession(userId);
+              if (!sessions || sessions.length === 0) {
+                return client.replyMessage(event.replyToken, { type: 'text', text: '📚 目前尚無歷史話題紀錄。發送任何訊息即可開始新話題！' });
+              }
+              const flexCard = sessionHelper.formatSessionsListFlex(userId, sessions, currentSess.id);
+              return client.replyMessage(event.replyToken, [flexCard]);
+            } else if (args.action === 'clear') {
+              sessionHelper.clearCurrentSession(userId);
+              return client.replyMessage(event.replyToken, { type: 'text', text: '🧹 已成功清空當前話題的對話記憶！' });
+            } else if (args.action === 'switch' && args.target_session_id) {
+              const res = sessionHelper.switchSession(userId, args.target_session_id);
+              if (res.success) {
+                const flexCard = sessionHelper.formatNewSessionFlex(res.session);
+                return client.replyMessage(event.replyToken, [{ type: 'text', text: `✅ ${res.message}` }, flexCard]);
+              } else {
+                return client.replyMessage(event.replyToken, { type: 'text', text: `❌ ${res.message}` });
+              }
+            }
+          } catch (sessErr) {
+            console.error('Tool 呼叫 manage_session 失敗:', sessErr);
+          }
+        } else if (fnName === 'get_life_service') {
+          try {
+            if (args.service === 'answer_book') {
+              const res = await servicesHelper.getAnswerBook();
+              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+            } else if (args.service === 'temple_oracle') {
+              const res = await servicesHelper.getTempleOracle();
+              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+            } else if (args.service === 'tang_poetry') {
+              const res = await servicesHelper.getTangPoetry();
+              if (res.success && res.flexMessage) return client.replyMessage(event.replyToken, [res.flexMessage]);
+            } else if (args.service === 'weather_alerts') {
+              const res = await servicesHelper.getWeatherAlerts();
+              if (res.success) return client.replyMessage(event.replyToken, [{ type: 'text', text: res.summary }]);
+            }
+          } catch (servErr) {
+            console.error('Tool 呼叫 get_life_service 失敗:', servErr);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `呼叫服務失敗: ${servErr.message}`
             });
           }
         }
@@ -3451,6 +3831,7 @@ ${context}`;
         });
         const summary = pseudoCall.summary || pseudoCall.content.slice(0, 180).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, pseudoCall.title, summary);
+        appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
         return client.replyMessage(event.replyToken, [flexMsg]);
       } catch (wikiErr) {
         console.error('偽 Tool Call 發布 Wiki 失敗:', wikiErr);
@@ -3458,7 +3839,10 @@ ${context}`;
     }
 
     // 3. 第三道防線：使用者明確要求透過 Wiki 發布 (例如「你透過 david888 wiki 寫一個...」)
-    const userWantsWiki = /wiki|知識庫|寫到wiki|發布到wiki|存到wiki/i.test(userInput);
+    const isExplicitPublishIntent = /(?:發布|發佈|寫入|寫到|存到|存入|做成|建立|保存到)(?:至|到|成)?\s*(?:david888\s*)?wiki|(?:用|透過)\s*wiki\s*(?:發布|寫|記錄|建立)/i.test(userInput);
+    const isReadOrAnalysisIntent = /(?:分析|評價|看|讀|說明|解釋|請問|內容|心得|怎麼看|評分|摘要|總結|翻譯)/i.test(userInput);
+    const userWantsWiki = isExplicitPublishIntent && !isReadOrAnalysisIntent;
+
     if (userWantsWiki && rawContent.length > 100) {
       console.log('⚡ 使用者明確要求 Wiki 發布，自動生成文章...');
       const lines = rawContent.split('\n');
@@ -3476,15 +3860,16 @@ ${context}`;
         const publishRes = await wikiHelper.publishNote(slug, rawContent, { theme: 'claude-canvas' });
         const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
+        appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
         return client.replyMessage(event.replyToken, [flexMsg]);
       } catch (wikiErr) {
         console.warn('用戶指定 Wiki 發布失敗，降級為純文字發送:', wikiErr);
       }
     }
 
-    // 4. 第四道防線：智慧長文自動攔截（> 600 字元且有結構）
+    // 4. 第四道防線：智慧長文自動攔截（> 800 字元且有結構）
     const hasMarkdownStructure = rawContent.includes('## ') || rawContent.includes('### ') || rawContent.includes('```');
-    if (rawContent.length > 600 && hasMarkdownStructure) {
+    if (rawContent.length > 800 && hasMarkdownStructure && !isReadOrAnalysisIntent) {
       console.log('⚡ 偵測到長篇 Markdown 分析內容，自動為用戶發布至 David888 Wiki...');
       const lines = rawContent.split('\n');
       let title = '';
@@ -3501,6 +3886,7 @@ ${context}`;
         const publishRes = await wikiHelper.publishNote(slug, rawContent, { theme: 'claude-canvas' });
         const summary = rawContent.slice(0, 200).replace(/[#*`_]/g, '').trim() + '...';
         const flexMsg = wikiHelper.formatWikiFlexMessage(publishRes, title, summary);
+        appendUserHistory(userId, userInput, `[已發布至 Wiki: ${publishRes.shareUrl}] ${summary}`);
         return client.replyMessage(event.replyToken, [flexMsg]);
       } catch (wikiErr) {
         console.warn('自動發布 Wiki 失敗，降級為純文字發送:', wikiErr);
@@ -3509,7 +3895,9 @@ ${context}`;
 
     // 5. 一般短篇問答直接回覆文字（若包含未清理的殘留標籤一併清理）
     const cleanedText = rawContent.replace(/\[(?:CALL:\/?\w+|TOOL_CALL:\w+)[^\]]*\]/gi, '').trim();
-    const echo = { type: 'text', text: cleanedText || rawContent || '抱歉，我沒有話可說了。' };
+    const finalReplyText = cleanedText || rawContent || '抱歉，我沒有話可說了。';
+    appendUserHistory(userId, userInput, finalReplyText);
+    const echo = { type: 'text', text: finalReplyText };
     return client.replyMessage(event.replyToken, [echo]);
   } catch (err) {
     console.log(err)

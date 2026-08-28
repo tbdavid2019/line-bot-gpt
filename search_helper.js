@@ -56,7 +56,7 @@ async function searchWeb(query, options = {}) {
 }
 
 /**
- * 讀取並解析網頁或線上文件為 Markdown
+ * 讀取並解析網頁或線上文件為 Markdown (支援 David888 Wiki 原生直讀與 2MD 高可用端點)
  * @param {string} targetUrl - 目標網址
  * @param {Object} options - 選項
  */
@@ -67,6 +67,34 @@ async function readWebPage(targetUrl, options = {}) {
 
   const cleanUrl = targetUrl.trim();
   const timeoutMs = options.timeout || 20000;
+
+  // 1. 若為 David888 Wiki 網址 (wiki.david888.com 或相關別名)，直接使用原生 Markdown 端點抓取完整原文
+  const isWikiUrl = /wiki\.(?:david888\.com|glsoft\.ai|aiurl\.tw)/i.test(cleanUrl) || 
+                    (process.env.WIKI_BASE_URL && cleanUrl.startsWith(process.env.WIKI_BASE_URL.replace(/\/+$/, '')));
+  if (isWikiUrl) {
+    try {
+      const res = await fetch(cleanUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'text/markdown, text/plain, */*' },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().length > 0) {
+          return {
+            success: true,
+            endpoint: 'David888 Wiki Native Markdown Engine',
+            url: cleanUrl,
+            content: text.trim().slice(0, 18000)
+          };
+        }
+      }
+    } catch (wikiErr) {
+      console.warn(`[search_helper] David888 Wiki 原生讀取失敗: ${wikiErr.message}，切換至 2MD 端點...`);
+    }
+  }
+
+  // 2. 一般網頁使用 2MD 多端點高可用解析
   let lastError = null;
 
   for (const baseUrl of ENDPOINTS) {
@@ -86,7 +114,7 @@ async function readWebPage(targetUrl, options = {}) {
             success: true,
             endpoint: baseUrl,
             url: cleanUrl,
-            content: text.trim().slice(0, 15000) // 限制最大長度以節省上下文
+            content: text.trim().slice(0, 18000) // 限制最大長度以節省上下文
           };
         }
       }
@@ -94,6 +122,28 @@ async function readWebPage(targetUrl, options = {}) {
       console.warn(`[search_helper] Endpoint ${baseUrl} read URL failed: ${err.message}`);
       lastError = err;
     }
+  }
+
+  // 3. 備用：若 2MD 全數失敗，嘗試直接 GET 原始網址 (適用於 Markdown/純文字/API 內容)
+  try {
+    const directRes = await fetch(cleanUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'text/markdown, text/plain, text/html, */*' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (directRes.ok) {
+      const text = await directRes.text();
+      if (text && text.trim().length > 0) {
+        return {
+          success: true,
+          endpoint: 'Direct HTTP Fallback',
+          url: cleanUrl,
+          content: text.trim().slice(0, 18000)
+        };
+      }
+    }
+  } catch (directErr) {
+    console.warn(`[search_helper] Direct fetch fallback failed: ${directErr.message}`);
   }
 
   return {
@@ -195,7 +245,7 @@ const searchTools = [
     type: 'function',
     function: {
       name: 'read_web_page',
-      description: '讀取並提取指定網址 (URL) 或線上文件 (PDF, Word, PPT, 網頁) 的完整內文轉換為 Markdown。當需要深入閱讀特定網站文章或連結內容時呼叫。',
+      description: '讀取並提取指定網址 (URL) 或線上文件 (網頁、新聞、GitHub、PDF、David888 Wiki 筆記等) 的完整內文轉換為 Markdown。當需要深入閱讀特定網站文章或連結內容時呼叫。',
       parameters: {
         type: 'object',
         properties: {
@@ -205,6 +255,27 @@ const searchTools = [
           }
         },
         required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_wiki_note',
+      description: '讀取 David888 Wiki (wiki.david888.com) 筆記或分享連結的完整 Markdown 內文。當使用者提供 Wiki 網址 (如 https://wiki.david888.com/share/xxx 或 https://wiki.david888.com/xxx)、筆記路徑或要求分析 Wiki 文章內容時呼叫此工具。',
+      parameters: {
+        type: 'object',
+        properties: {
+          url_or_slug: {
+            type: 'string',
+            description: 'Wiki 筆記的完整網址 (如 https://wiki.david888.com/share/xxxx) 或路徑 slug (如 article-123)'
+          },
+          password: {
+            type: 'string',
+            description: '存取密碼 (若筆記有設定密碼保護時提供，平時留空)'
+          }
+        },
+        required: ['url_or_slug']
       }
     }
   }

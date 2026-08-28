@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-08-28
+
+### 🚀 Added & Enhanced (Smart URL Pre-Fetching & Multi-Turn Memory)
+- **Zero-Shot Agentic Tool Calling & Intent Deconstruction Core** (`services_helper.js` & `index.js`):
+  - Upgraded the LLM from a passive text responder into an autonomous Agent Router equipped with a full suite of Actuators:
+    - `generate_image`: Natural language image generation & editing.
+    - `search_web`: Live internet search for facts, quotes, weather, and news.
+    - `read_web_page` & `read_wiki_note`: Deep article parsing and grounding.
+    - `publish_to_wiki`: Autonomous long-form markdown research publishing.
+    - `manage_session`: Autonomous dialogue topic creation, listing, switching, and clearing.
+    - `get_life_service`: Autonomous divination (解答之書, 淺草籤, 唐詩) and CWA weather alerts.
+  - Eliminated brittle regex bottlenecks so users can express complex requests in free natural language.
+- **Automatic URL Pre-Fetching & Context Enrichment**:
+  - Automatically detects HTTP/HTTPS URLs (e.g. `wiki.david888.com/share/...`, news, documentation, external links) in user messages.
+  - Proactively pre-fetches and injects clean Markdown content directly into prompt context, eliminating LLM tool-calling delay and completely resolving hallucinations ("我看得到" / "我看不到").
+- **David888 Wiki Native Markdown Engine Integration** (`wiki_helper.js` & `search_helper.js`):
+  - Added `wikiHelper.readWikiUrl()` supporting full URLs, share links (`/share/<id>`), and note paths.
+  - Enhanced `readWebPage()` to natively fetch pure Markdown with `Accept: text/markdown` headers from `wiki.david888.com`, bypassing SPA UI shells.
+  - Added `read_wiki_note` OpenAI Function Calling tool.
+- **Interactive Global Help Menu & LLM Capability Awareness** (`session_helper.js` & `index.js`):
+  - **4-Slide Interactive Flex Carousel (`!help`, `說明`, `功能`, `選單`, `menu`)**:
+    - Slide 1 (Session & Memory): `!new`, `!sessions`, `!clear` with quick action buttons.
+    - Slide 2 (AI Image & Vision): `產圖 <描述>`, `生圖`, `畫圖`, image upload vision analysis.
+    - Slide 3 (2MD SERP & Web Reader): `!search <query>`, `!read <url>`, live quotes/weather.
+    - Slide 4 (Wiki & Cloud Tools): `!wiki`, `!box` Podcast, life divination, recipes, nearby places.
+  - **Proactive LLM System Prompt Knowledge**: LLM is fully aware of all bot capabilities and commands, providing structured markdown tables and instructions whenever users ask "你會什麼" / "有什麼指令".
+- **Modern Session-Based Memory & 7-Day Long-Term Persistence** (`session_helper.js`):
+  - **7-Day Automatic Session Lifecycle**: Retains user conversation history for 7 days. If a user is inactive for >7 days, the system automatically starts a new session on their next interaction.
+  - **Disk Persistence (`./data/sessions.json`)**: Thread-safe atomic file writes preserve user sessions across container restarts and Watchtower redeployments.
+  - **Multi-Session Management Commands**:
+    - `!new` (or `開啟新話題`, `新對話`): Instantly starts a fresh session and renders a clean LINE Flex Card.
+    - `!sessions` (or `查看話題`, `話題清單`): Lists recent sessions with titles, message counts, and timestamps.
+    - `!session <id>` (or `切換話題 <id>`): Switches the active context back to a previous topic.
+    - `!clear` (or `!reset`, `清除記憶`): Clears messages in the active session while retaining the session ID.
+  - **Smart Context Compaction**: Automatically selects the most relevant recent turns (up to 16 messages) ensuring optimal token usage while retaining deep multi-turn memory.
+- **Upgraded Fallback LLM Model**:
+  - Updated default fallback model on Groq to `openai/gpt-oss-120b` for vastly superior reasoning and instruction following.
+
+### 🐛 Fixed
+- **Image Generation Trigger & Prompt Parser Optimization**:
+  - Fixed an issue where natural language prompts (such as `產圖　一個體重87公斤台灣男子`, `生圖`, `幫我畫`, `繪圖` with full-width or half-width spaces) were not recognized as image requests.
+  - Added `generate_image` OpenAI Function Calling tool so the LLM can also autonomously invoke image generation during conversational chat.
+- **Wiki Publication Intent False Positives**:
+  - Fixed an issue where questions containing the word "wiki" (e.g. "分析這個 wiki 文章") triggered the auto-publisher regex. Regex now strictly requires explicit creation/writing intent and excludes analysis/read queries.
+
 ---
 
 ## [1.5.0] - 2026-08-27

@@ -131,6 +131,82 @@ async function readNote(notePath, password = '') {
 }
 
 /**
+ * 讀取 Wiki 筆記或分享連結 Markdown 原文 (智慧解析任何 Wiki URL 或 Share Link)
+ * @param {string} rawUrlOrSlug - 筆記路徑、分享連結或完整網址
+ * @param {string} password - 存取密碼 (若有保護)
+ */
+async function readWikiUrl(rawUrlOrSlug, password = '') {
+  if (!rawUrlOrSlug || typeof rawUrlOrSlug !== 'string') {
+    return { success: false, error: 'URL or slug is required' };
+  }
+
+  let input = rawUrlOrSlug.trim();
+  let targetUrl = input;
+
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = `${BASE_URL}/${targetUrl.replace(/^\/+/, '')}`;
+  }
+
+  if (password) {
+    targetUrl += (targetUrl.includes('?') ? '&' : '?') + `pw=${encodeURIComponent(password)}`;
+  }
+
+  try {
+    const res = await fetch(targetUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/markdown, text/plain, */*'
+      },
+      signal: AbortSignal.timeout(20000)
+    });
+
+    if (res.ok) {
+      const text = await res.text();
+      return {
+        success: true,
+        url: targetUrl,
+        markdown: text.trim(),
+        shareUrl: targetUrl
+      };
+    }
+
+    // 若直接 GET 失敗，嘗試抽取 slug 後呼叫 /api/:slug
+    const slug = input.replace(/^https?:\/\/[^/]+\//, '').replace(/^share\//, '').replace(/^\/+/, '').split('/')[0].split('?')[0];
+    if (slug) {
+      let apiUrl = `${API_BASE_URL}/${slug}`;
+      if (password) apiUrl += `?pw=${encodeURIComponent(password)}`;
+      const apiRes = await fetch(apiUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'text/markdown, application/json' },
+        signal: AbortSignal.timeout(20000)
+      });
+      if (apiRes.ok) {
+        const text = await apiRes.text();
+        return {
+          success: true,
+          path: slug,
+          url: `${BASE_URL}/${slug}`,
+          markdown: text.trim(),
+          shareUrl: `${BASE_URL}/${slug}`
+        };
+      }
+    }
+
+    return {
+      success: false,
+      url: targetUrl,
+      error: `Wiki API returned HTTP ${res.status}: ${res.statusText}`
+    };
+  } catch (err) {
+    return {
+      success: false,
+      url: targetUrl,
+      error: err.message
+    };
+  }
+}
+
+/**
  * 將外部網頁 URL 轉換為 Markdown (使用 2md.aiurl.tw / wiki parse API)
  * @param {string} url - 外部文章網址
  */
@@ -380,6 +456,7 @@ module.exports = {
   sanitizePath,
   publishNote,
   readNote,
+  readWikiUrl,
   parseUrlToMarkdown,
   formatWikiFlexMessage,
   extractPseudoWikiCall
