@@ -11,6 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const securityHelper = require('./security_helper');
 
 const DATA_DIR = path.resolve(__dirname, 'data');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
@@ -147,8 +148,14 @@ function startNewSession(userId, initialTitle = '') {
 // 切換至指定 Session (/session <id>)
 function switchSession(userId, targetSessionId) {
   if (!userId || !targetSessionId) return { success: false, message: '請提供話題 ID' };
+  
+  // 驗證 Session ID 格式 (英數字元、減號、底線)，防範路徑遍歷與 Prototype 污染
+  if (!securityHelper.isValidId(targetSessionId)) {
+    return { success: false, message: '無效的話題 ID 格式' };
+  }
+
   const uData = memoryCache.get(userId);
-  if (!uData || !uData.sessions[targetSessionId]) {
+  if (!uData || !uData.sessions || !Object.prototype.hasOwnProperty.call(uData.sessions, targetSessionId)) {
     return { success: false, message: `找不到話題 ID「${targetSessionId}」` };
   }
 

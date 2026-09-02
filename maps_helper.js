@@ -149,7 +149,7 @@ function formatPlacesMessage(places) {
                         action: {
                             type: 'uri',
                             label: '開啟地圖',
-                            uri: `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${place.place_id}`
+                            uri: `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${encodeURIComponent(place.place_id || '')}`
                         }
                     }
                 ],

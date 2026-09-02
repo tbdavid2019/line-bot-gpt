@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const securityHelper = require('./security_helper');
 
 // 預設端點清單（依優先順序排序）
 const DEFAULT_ENDPOINTS = [
@@ -127,6 +128,15 @@ async function uploadBuffer(buffer, filename = 'file.bin', mimeType = 'applicati
  */
 async function uploadFromUrl(remoteUrl, options = {}) {
   const { title = '', description = '', password = '', token = process.env.BOX_API_TOKEN || '' } = options;
+
+  if (!remoteUrl || typeof remoteUrl !== 'string') {
+    throw new Error('remoteUrl is required');
+  }
+
+  // SSRF 安全防禦檢驗 (封鎖私有 IP、雲端 Metadata、Loopback)
+  if (!securityHelper.isSafeUrl(remoteUrl)) {
+    throw new Error('拒絕存取：此 URL 屬於受保護的私有網路或雲端服務位址 (SSRF Protection)');
+  }
 
   return executeWithFallback(async (endpoint) => {
     // 優先嘗試 MCP upload_asset_by_url
@@ -383,13 +393,13 @@ function formatAssetFlexMessage(asset) {
   if (asset.type === 'image' && asset.url) {
     bubble.hero = {
       type: 'image',
-      url: asset.url,
+      url: securityHelper.sanitizeUri(asset.url, 'https://box.david888.com'),
       size: 'full',
       aspectRatio: '1:1',
       aspectMode: 'cover',
       action: {
         type: 'uri',
-        uri: asset.shareUrl || asset.url
+        uri: securityHelper.sanitizeUri(asset.shareUrl || asset.url, 'https://box.david888.com')
       }
     };
   }
@@ -404,7 +414,7 @@ function formatAssetFlexMessage(asset) {
       action: {
         type: 'uri',
         label: '🌐 在 888box 檢視',
-        uri: asset.shareUrl
+        uri: securityHelper.sanitizeUri(asset.shareUrl, 'https://box.david888.com')
       }
     });
   }
@@ -417,7 +427,7 @@ function formatAssetFlexMessage(asset) {
       action: {
         type: 'uri',
         label: '📥 直接下載 / CDN 連結',
-        uri: asset.url
+        uri: securityHelper.sanitizeUri(asset.url, 'https://box.david888.com')
       }
     });
   }
@@ -523,7 +533,7 @@ function formatStatsFlexMessage(stats) {
             action: {
               type: 'uri',
               label: '🌐 開啟 888box 首頁',
-              uri: stats.endpoint || 'https://box.david888.com'
+              uri: securityHelper.sanitizeUri(stats.endpoint || 'https://box.david888.com')
             }
           }
         ]

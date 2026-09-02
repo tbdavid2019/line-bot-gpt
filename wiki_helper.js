@@ -5,6 +5,8 @@
  * 提供網頁轉 Markdown、統計解析、簡報模式 (Slides) 與電子書模式 (Book) 連結
  */
 
+const securityHelper = require('./security_helper');
+
 const BASE_URL = process.env.WIKI_BASE_URL 
   ? process.env.WIKI_BASE_URL.replace(/\/+$/, '') 
   : 'https://wiki.david888.com';
@@ -201,6 +203,15 @@ async function readWikiUrl(rawUrlOrSlug, password = '') {
     targetUrl = `${BASE_URL}/${targetUrl.replace(/^\/+/, '')}`;
   }
 
+  // SSRF 安全防禦檢驗 (封鎖私有 IP、雲端 Metadata、Loopback)
+  if (!securityHelper.isSafeUrl(targetUrl)) {
+    return {
+      success: false,
+      url: targetUrl,
+      error: '拒絕存取：此 URL 屬於受保護的私有網路或雲端服務位址 (SSRF Protection)'
+    };
+  }
+
   if (password) {
     targetUrl += (targetUrl.includes('?') ? '&' : '?') + `pw=${encodeURIComponent(password)}`;
   }
@@ -265,11 +276,21 @@ async function readWikiUrl(rawUrlOrSlug, password = '') {
  * @param {string} url - 外部文章網址
  */
 async function parseUrlToMarkdown(url) {
+  if (!url || typeof url !== 'string') {
+    throw new Error('URL is required');
+  }
+
+  const cleanUrl = url.trim();
+  // SSRF 安全防禦檢驗 (封鎖私有 IP、雲端 Metadata、Loopback)
+  if (!securityHelper.isSafeUrl(cleanUrl)) {
+    throw new Error('拒絕存取：此 URL 屬於受保護的私有網路或雲端服務位址 (SSRF Protection)');
+  }
+
   const targetUrl = `${API_BASE_URL}/markdown/parse`;
   const res = await fetch(targetUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: url }),
+    body: JSON.stringify({ url: cleanUrl }),
     signal: AbortSignal.timeout(30000)
   });
 
@@ -481,7 +502,7 @@ function formatWikiFlexMessage(wikiResult, title = '', summary = '') {
             action: {
               type: 'uri',
               label: '🌐 閱讀 Wiki 文章',
-              uri: wikiResult.shareUrl
+              uri: securityHelper.sanitizeUri(wikiResult.shareUrl, 'https://wiki.david888.com')
             }
           },
           {
@@ -497,7 +518,7 @@ function formatWikiFlexMessage(wikiResult, title = '', summary = '') {
                 action: {
                   type: 'uri',
                   label: '📑 2D 簡報',
-                  uri: wikiResult.presentUrl
+                  uri: securityHelper.sanitizeUri(wikiResult.presentUrl, 'https://wiki.david888.com')
                 }
               },
               {
@@ -508,7 +529,7 @@ function formatWikiFlexMessage(wikiResult, title = '', summary = '') {
                 action: {
                   type: 'uri',
                   label: '📚 電子書',
-                  uri: wikiResult.bookUrl
+                  uri: securityHelper.sanitizeUri(wikiResult.bookUrl, 'https://wiki.david888.com')
                 }
               }
             ]

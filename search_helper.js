@@ -3,6 +3,8 @@
  * 支援多端點高可用容錯（Primary: 2md.aiurl.tw / Fallback 1: 2md.glsoft.ai / Fallback 2: create360.ai）
  */
 
+const securityHelper = require('./security_helper');
+
 const ENDPOINTS = [
   process.env.SERP_PRIMARY_URL || 'https://2md.aiurl.tw',
   process.env.SERP_FALLBACK_1_URL || 'https://2md.glsoft.ai',
@@ -94,6 +96,15 @@ async function readWebPage(targetUrl, options = {}) {
 
   const cleanUrl = targetUrl.trim();
   const timeoutMs = options.timeout || 4000;
+
+  // SSRF 安全防禦檢驗 (封鎖私有 IP、雲端 Metadata、Loopback)
+  if (!securityHelper.isSafeUrl(cleanUrl)) {
+    return {
+      success: false,
+      url: cleanUrl,
+      error: '拒絕存取：此 URL 屬於受保護的私有網路或雲端服務位址 (SSRF Protection)'
+    };
+  }
 
   // 1. 若為 David888 Wiki 網址 (wiki.david888.com 或相關別名)，直接使用原生 Markdown 端點抓取完整原文
   const isWikiUrl = /wiki\.(?:david888\.com|glsoft\.ai|aiurl\.tw)/i.test(cleanUrl) || 

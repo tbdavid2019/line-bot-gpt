@@ -654,16 +654,26 @@ line-bot-gpt/
 │   ├── requirements.txt            # Python 套件需求
 │   └── chroma_db/                  # ChromaDB 向量資料庫目錄
 │
-├── 🗺️ 周邊設施查詢
-│   └── maps_helper.js              # Google Maps API 整合模組
+├── 🛡️ 安全防禦與工具模組
+│   ├── security_helper.js          # 全域 7 層安全驗證核心（SSRF / URI / ReDoS / 時序安全）
+│   ├── box_helper.js               # 888box 雲端資產管理與高可用 CDN
+│   ├── wiki_helper.js              # David888 Wiki 原生 Markdown 引擎與發布模組
+│   ├── search_helper.js            # 2MD SERP 即時搜尋與網頁解析
+│   ├── session_helper.js           # 7 天長效 Session 與對話話題持久化引擎
+│   └── services_helper.js          # 生活智慧工具（即時氣象、開運占卜、氣象警報）
 │
-├── 📚 說明文檔
+├── 📚 說明文檔與技能
 │   ├── README.md                   # 📖 專案主要說明（您正在閱讀）
+│   ├── CHANGELOG.md                # 📝 版本演進日誌
+│   ├── AGENTS.md                   # 🤖 AI Agent 開發規範與 SOP
+│   ├── .agents/skills/             # 🛠️ 專案專屬 Agent 技能庫
+│   │   └── security-audit/SKILL.md # 🛡️ 7 層安全審計標準規範
 │   ├── IMAGE_GENERATION_GUIDE.md   # 🎨 圖片生成功能使用指南
 │   ├── GOOGLE_CLOUD_SETUP.md       # ☁️ Google Cloud Storage 設定指南
 │   └── DOCKER_DEPLOY.md            # 🐳 Docker 部署完整指南
 │
 ├── 🧪 測試相關
+│   ├── test/security.test.js       # 🛡️ 7 層安全審計自動化測試（npm test）
 │   └── test_image_generation.js    # 圖片生成功能測試腳本
 │
 └── 📁 資料夾

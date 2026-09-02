@@ -18,6 +18,7 @@ const wikiHelper = require('./wiki_helper')
 const searchHelper = require('./search_helper')
 const sessionHelper = require('./session_helper')
 const servicesHelper = require('./services_helper')
+const securityHelper = require('./security_helper')
 
 // 安全回覆函數：優先使用 replyMessage，若逾時或失敗自動降級為 pushMessage，保證訊息 100% 抵達使用者
 async function safeReply(event, messages) {
@@ -1106,7 +1107,7 @@ function extractImagePrompt(text) {
   ];
 
   for (const p of prefixes) {
-    const reg = new RegExp('^' + p + '[:：\\s]*', 'i');
+    const reg = new RegExp('^' + securityHelper.escapeRegExp(p) + '[:：\\s]*', 'i');
     if (reg.test(cleaned)) {
       cleaned = cleaned.replace(reg, '').trim();
       break;
@@ -1119,12 +1120,25 @@ function extractImagePrompt(text) {
 // create Express app
 const app = express()
 
+// 隱藏 Express 特徵標頭
+app.disable('x-powered-by');
+
+// 全域 HTTP 安全防禦標頭 (Layer 6: Security Headers)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  next();
+});
+
 // 健康檢查端點
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.2.0'
+    version: '1.2.1'
   })
 })
 
@@ -3547,6 +3561,10 @@ ${context}`;
     if (detectedUrls.length > 0) {
       console.log(`🌐 偵測到使用者訊息包含 ${detectedUrls.length} 個網址，啟動預先解析...`, detectedUrls);
       for (const rawUrl of detectedUrls) {
+        if (!securityHelper.isSafeUrl(rawUrl)) {
+          console.warn(`[URL Auto-fetch] 跳過不安全或內部網址 (SSRF 防禦): ${rawUrl}`);
+          continue;
+        }
         try {
           const isWiki = /wiki\.(?:david888\.com|glsoft\.ai|aiurl\.tw)/i.test(rawUrl) || 
                          (process.env.WIKI_BASE_URL && rawUrl.startsWith(process.env.WIKI_BASE_URL.replace(/\/+$/, '')));

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-09-02
+
+### 🛡️ Security Audit & Hardening (7-Layer Security Standard)
+- **Zero NPM CVEs & Supply Chain Hardening** (`package.json` & `package-lock.json`):
+  - Upgraded `@line/bot-sdk` to `^9.9.0` and enforced `overrides: { "uuid": "^11.1.0" }`.
+  - Cleared all 18 CVE vulnerabilities across `fast-xml-parser` (Critical), `ws`, `form-data`, `path-to-regexp`, `jws`, achieving **0 vulnerabilities** on `npm audit`.
+- **SSRF & Cloud Metadata Protection** (`security_helper.js`, `search_helper.js`, `box_helper.js`, `wiki_helper.js`, `index.js`):
+  - Added centralized `isSafeUrl()` filter to strictly block cloud metadata services (`169.254.169.254`, `metadata.google.internal`), `localhost`, `127.0.0.1`, `[::1]`, and RFC 1918 private subnets.
+- **HTTP Defense Headers & Express Hardening** (`index.js`):
+  - Added global security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`.
+  - Disabled `X-Powered-By` header leak.
+- **URI Sanitization & Prototype Pollution Defense**:
+  - Enforced `securityHelper.sanitizeUri()` on all LINE Flex Message action URIs (`javascript:` / `data:` / `file:` blocked).
+  - Validated Session IDs with `isValidId()` and added `hasOwnProperty` checks in `session_helper.js`.
+- **RegExp Escaping & Timing Safety**:
+  - Added `escapeRegExp()` in dynamic prompt prefix matchers.
+  - Added `secureEquals()` with pre-hashed SHA-256 for timing-safe equality.
+- **7-Layer Automated Test Suite & Skill** (`.agents/skills/security-audit/SKILL.md` & `test/security.test.js`):
+  - Added 13 automated security regression tests, executable via `npm test`.
+
 ## [1.6.0] - 2026-08-28
 
 ### 🚀 Added & Enhanced (Smart URL Pre-Fetching & Multi-Turn Memory)
