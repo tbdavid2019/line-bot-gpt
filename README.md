@@ -56,7 +56,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
   - 💾 **磁碟原子持久化 (`./data/sessions.json`)**：伺服器重啟或 Docker / Watchtower 自動部署皆不遺失歷史話題。
   - ⚡ **話題管理指令**：支援 `/new`（開啟新話題）、`/sessions`（瀏覽歷史話題）、`/session <id>`（切換話題）、`/clear`（清空當前記憶）。
 - 🧠 **網址自動預先解析與零延遲注入 (Smart URL Pre-Fetching)**：主動偵測訊息中的外部連結與 Wiki 分享文章，自動直抓純淨 Markdown 內文注入上下文，杜絕 AI 幻覺
-- 🌐 **2MD 即時聯網搜尋與網頁解析 (SERP & Web Reader)**：三端點高可用容錯（Primary: `2md.aiurl.tw`，Fallback: `2md.glsoft.ai`, `create360.ai`），支援 OpenAI Tool Calling (`search_web`, `read_web_page`, `read_wiki_note`)
+- 🌐 **2MD 即時聯網搜尋與網頁解析 (SERP & Web Reader)**：三端點高可用容錯（Primary: `2md.aiurl.tw`，Fallback: `2md.glsoft.ai`, `create360.ai`），內建動態熔斷器 (Circuit Breaker)、In-Flight 請求去重 (Single-Flight) 與短期快取防禦驚群踩踏，支援 OpenAI Tool Calling (`search_web`, `read_web_page`, `read_wiki_note`)
 - 📦 **888box 雲端多媒體資產庫**：三端點高可用容錯（Primary: `box.david888.com`，Fallback: `box.glsoft.ai`, `box.aiurl.tw`），支援 AI 圖片/影片/檔案自動 CDN 存儲與 Podcast 訂閱
 - 整合 OpenAI 相容端點與 Groq `openai/gpt-oss-120b` 高階模型（具備多輪 Agentic Tool Execution Loop）
 - 整合 Google Gemini 2.5/3.1 Flash AI 視覺功能
@@ -169,6 +169,12 @@ Bot: 🎤 您說：「講個笑話」
 > [!TIP]
 > **LLM 具備即時聯網瀏覽能力！不再受限於知識截止日期！**
 > 整合 2MD 三端點高可用搜尋引擎（`2md.aiurl.tw`, `2md.glsoft.ai`, `create360.ai`），支援即時天氣、即時股價、最新新聞、網址解析與線上文件轉換。
+>
+> **高併發防驚群架構 (Thundering Herd & Cascading Failure Defense)**：
+> - **彈性超時機制 (Resilient Timeouts)**：搜尋與網頁解析調優至 10.0s，解決過短超時誤殺正常運算節點之問題。
+> - **動態熔斷器 (Circuit Breaker)**：端點連續失敗 2 次即進入 45 秒冷卻，後續請求主動繞過故障節點，避免連鎖踩踏。
+> - **併發單飛去重 (Single-Flight Pattern)**：同一時間內針對相同關鍵字或網址的並發請求複用同一個 Promise，杜絕後端幽靈負載倍增。
+> - **短期記憶體快取 (TTL Cache)**：3 分鐘熱門搜尋與網頁解析快取，減輕外部查詢壓力與延遲。
 
 **智能自動觸發 (Agentic Tool Calling)：**
 - 當向 Bot 詢問任何時效性問題時（例如：「高雄鼓山天氣如何」、「台積電今日即時股價」、「最新重大新聞」、「解析這篇網址 https://...」），LLM 會主動呼叫 `search_web` 或 `read_web_page` 取得最新即時資訊後精準回答！

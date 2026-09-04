@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-09-04
+
+### ⚡ Enhanced & Reliability (2MD Search Engine Resilience & Thundering Herd Defense)
+- **Resilient Real-Time Timeouts** (`search_helper.js`):
+  - Upgraded SERP search and web page parsing default timeouts from `3500ms`/`4000ms` to `10000ms` (10.0s) and simplified query fallback to `6000ms` (6.0s), solving premature aborts that killed healthy scraping tasks.
+- **Dynamic Circuit Breaker & Health State Memory**:
+  - Added failure counter and cooldown state (`failures >= 2` triggers 45s cooldown).
+  - Implemented `getPrioritizedEndpoints()`: automatically bypasses degraded or cooling-down endpoints, preventing cascading timeouts and eliminating the domino stampede.
+- **In-Flight Single-Flight Request Deduplication**:
+  - Added `runSingleFlight()` for concurrent query/URL requests, coalescing identical simultaneous requests onto a single Promise to prevent ghost load duplication.
+- **In-Memory TTL Caching**:
+  - Implemented 3-minute LRU/TTL cache for popular SERP queries and web parsing results, reducing redundant downstream traffic.
+- **Automated Unit Testing & Environment Configuration**:
+  - Added `test/search_helper.test.js` verifying circuit breaker state transitions, timeout defaults, single-flight dedup, and SSRF defense.
+  - Updated `example.env` and `README.md` with configurable parameters (`SERP_TIMEOUT_MS`, `READ_PAGE_TIMEOUT_MS`, `SERP_CIRCUIT_FAIL_THRESHOLD`, `SERP_CIRCUIT_COOLDOWN_MS`, `SERP_CACHE_TTL_MS`).
+
 ## [1.7.0] - 2026-09-02
 
 ### 🛡️ Security Audit & Hardening (7-Layer Security Standard)
