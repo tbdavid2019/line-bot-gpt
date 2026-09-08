@@ -19,6 +19,7 @@ const searchHelper = require('./search_helper')
 const sessionHelper = require('./session_helper')
 const servicesHelper = require('./services_helper')
 const securityHelper = require('./security_helper')
+const magikaHelper = require('./magika_helper')
 
 // 安全回覆函數：優先使用 replyMessage，若逾時或失敗自動降級為 pushMessage，保證訊息 100% 抵達使用者
 async function safeReply(event, messages) {
@@ -1440,8 +1441,13 @@ async function handleEvent(event) {
           });
         }
 
-        const result = await boxHelper.uploadBuffer(fileBuffer, fileName, 'application/octet-stream', {
-          title: fileName
+        // 透過 Google Magika AI 本地深度學習模型識別檔案真實 MIME 類型與內容分類 (純本地零外網推理)
+        const detection = await magikaHelper.identifyBuffer(fileBuffer, fileName);
+        console.log(`🔍 [Magika] 檔案分析結果: ${detection.description} (${detection.mimeType}), 標籤: ${detection.label}, 信心度: ${detection.score}, 引擎: ${detection.engine}`);
+
+        const result = await boxHelper.uploadBuffer(fileBuffer, fileName, detection.mimeType, {
+          title: fileName,
+          description: `Google Magika 識別: ${detection.description} (${detection.mimeType})`
         });
 
         const flexMessage = boxHelper.formatAssetFlexMessage(result);

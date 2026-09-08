@@ -58,6 +58,7 @@ This project is a Line Bot based on the [LINE Messaging API](https://developers.
 - 🧠 **網址自動預先解析與零延遲注入 (Smart URL Pre-Fetching)**：主動偵測訊息中的外部連結與 Wiki 分享文章，自動直抓純淨 Markdown 內文注入上下文，杜絕 AI 幻覺
 - 🌐 **2MD 即時聯網搜尋與網頁解析 (SERP & Web Reader)**：三端點高可用容錯（Primary: `2md.aiurl.tw`，Fallback: `2md.glsoft.ai`, `create360.ai`），內建動態熔斷器 (Circuit Breaker)、In-Flight 請求去重 (Single-Flight) 與短期快取防禦驚群踩踏，支援 OpenAI Tool Calling (`search_web`, `read_web_page`, `read_wiki_note`)
 - 📦 **888box 雲端多媒體資產庫**：三端點高可用容錯（Primary: `box.david888.com`，Fallback: `box.glsoft.ai`, `box.aiurl.tw`），支援 AI 圖片/影片/檔案自動 CDN 存儲與 Podcast 訂閱
+- 🔬 **Google Magika AI 本地檔案內容識別 (`magika_helper.js`)**：Docker 映像檔建置時內嵌 Google 深度學習模型（多架構 AMD64/ARM64 支援），在記憶體中透過 stdin 串流分析檔案位元組（5ms 超高速推理），實現 99%+ 準確 MIME 判定與 888box 資產自動歸類，杜絕副檔名偽造攻擊
 - 整合 OpenAI 相容端點與 Groq `openai/gpt-oss-120b` 高階模型（具備多輪 Agentic Tool Execution Loop）
 - 整合 Google Gemini 2.5/3.1 Flash AI 視覺功能
   - 🔍 **圖片分析**：上傳圖片讓 AI 分析內容（看圖說話）
@@ -185,6 +186,17 @@ Bot: 🎤 您說：「講個笑話」
   - 例：`!search 台積電 今日股價`
 - `!read <網址>` / `!讀取 <網址>` / `!2md <網址>`：直接將網址轉為 clean Markdown
   - 例：`!read https://example.com/news`
+
+### 🔬 Google Magika AI 本地檔案型態識別 (AI File Type Detection)
+
+> [!TIP]
+> **深度學習檔案分析，杜絕副檔名欺騙與未知格式！**
+> 整合 Google 開源的 [Magika](https://github.com/google/magika) 深度學習模型，以輕量神經網路 (~1MB) 在本機以 ~5ms 速度精準判定檔案真實格式（支援 100+ 種二進位檔、腳本、文件與多媒體）。
+
+- **純本地零連網 (Offline Inference)**：二進位執行檔直接內嵌模型權重至 Docker 映像檔，運行時無需發送外部網路請求，保證隱私與極致響應速度。
+- **零磁碟 I/O 串流 (Stdin Pipeline)**：透過 Node.js 串流管道直接將記憶體 Buffer 餵入判定，不需落地暫存檔。
+- **LINE 檔案智能歸類**：自動將使用者傳入的 LINE 檔案（如影片、音訊、PDF、文件、壓縮檔）解析出精準 MIME 類型，自動歸類上傳至 888box。
+- **多架構原生支援**：支援 `linux/amd64` 與 AWS Graviton ARM64 (`linux/arm64`)。
 
 ### 🛠️ 線上工具集
 

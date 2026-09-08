@@ -1,9 +1,9 @@
 {
     "name": "line-bot",
-    "version": "1.8.0",
+    "version": "1.9.0",
     "main": "index.js",
     "scripts": {
-        "test": "node test/security.test.js && node test/search_helper.test.js",
+        "test": "node test/security.test.js && node test/search_helper.test.js && node test/magika_helper.test.js",
         "start": "node index.js",
         "test-image": "node test_image_generation.js"
     },

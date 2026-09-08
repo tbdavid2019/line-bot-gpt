@@ -4,13 +4,37 @@ FROM node:22-slim
 # 設置工作目錄
 WORKDIR /usr/src/app
 
-# 安裝系統依賴 (Python 和 Build tools)
+# 安裝系統依賴 (Python, Build tools, curl, xz-utils)
 RUN apt-get update && apt-get install -y \
   python3 \
   python3-pip \
   python3-venv \
   build-essential \
+  curl \
+  xz-utils \
   && rm -rf /var/lib/apt/lists/*
+
+# 安裝 Google Magika 原生獨立二進位檔 (多架構 AMD64/ARM64 支援，內建深度學習模型，零外網連線)
+ARG TARGETARCH
+RUN if [ -z "$TARGETARCH" ]; then \
+      UNAME_M=$(uname -m); \
+      case "$UNAME_M" in \
+        "x86_64") MAGIKA_ARCH="x86_64" ;; \
+        "aarch64"|"arm64") MAGIKA_ARCH="aarch64" ;; \
+        *) MAGIKA_ARCH="x86_64" ;; \
+      esac; \
+    else \
+      case "$TARGETARCH" in \
+        "amd64") MAGIKA_ARCH="x86_64" ;; \
+        "arm64") MAGIKA_ARCH="aarch64" ;; \
+        *) MAGIKA_ARCH="x86_64" ;; \
+      esac; \
+    fi && \
+    echo "Installing Google Magika for architecture: ${MAGIKA_ARCH}..." && \
+    curl -LsSf "https://github.com/google/magika/releases/download/cli/v1.1.0/magika-cli-${MAGIKA_ARCH}-unknown-linux-gnu.tar.xz" \
+    | tar -xJ -C /usr/local/bin --strip-components=1 && \
+    chmod +x /usr/local/bin/magika && \
+    /usr/local/bin/magika --version
 
 # 複製 package.json 和 package-lock.json
 COPY package*.json ./

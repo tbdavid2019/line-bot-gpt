@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-09-08
+
+### 🚀 Added & AI File Type Detection (Google Magika Native Integration)
+- **Google Magika AI Native Integration** (`magika_helper.js` & `index.js`):
+  - Integrated Google Magika's lightweight (~1MB) deep learning model for 100% offline, local sub-5ms content type detection with 99%+ accuracy across 100+ binary, code, document, and media formats.
+  - Implemented zero-disk I/O stdin streaming pipeline via `magika --json -`, analyzing in-memory `Buffer` without writing temporary files to disk.
+  - Added graceful fallback to magic bytes and filename extension inference when Magika binary is absent.
+- **Multi-Architecture Docker Build Ingestion** (`Dockerfile`):
+  - Automated multi-arch Linux binary installation (`x86_64` for AMD64, `aarch64` for AWS Graviton ARM64) using `TARGETARCH` detection during image build.
+  - Baked the pre-compiled Magika standalone Rust binary (with static neural network weights) directly into the production container, eliminating runtime network downloads.
+- **LINE File Ingestion & 888box Asset Categorization Enhancement**:
+  - Automatically classifies incoming LINE `file` attachments into exact MIME types (`application/pdf`, `video/mp4`, `audio/mpeg`, etc.), eliminating hardcoded `application/octet-stream` and enabling accurate 888box cloud asset indexing.
+- **Automated Unit Testing** (`test/magika_helper.test.js`):
+  - Added test suite for CLI detection, JSON/PNG/PDF buffer analysis, and fallback resiliency, integrated into `npm test`.
+
 ## [1.8.0] - 2026-09-04
 
 ### ⚡ Enhanced & Reliability (2MD Search Engine Resilience & Thundering Herd Defense)
