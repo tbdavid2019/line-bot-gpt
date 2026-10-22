@@ -1,5 +1,5 @@
 # 使用 Node.js 22 Slim (Debian based) 以獲得更好的 Python 相容性
-FROM node:22-slim
+FROM node:22.23.4-slim
 
 # 設置工作目錄
 WORKDIR /usr/src/app
