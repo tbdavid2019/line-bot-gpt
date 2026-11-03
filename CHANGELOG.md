@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-11-03
+
+### 🛡️ Security & Dependabot Vulnerability Resolution
+- **升級 Express 與相關相依套件至安全版本**:
+  - `express`: 升級為 `^4.22.3`。
+  - `body-parser`: 自動升級至 `1.20.9`，修復壓縮請求主體拖尾位元組導致的 DoS 漏洞（`GHSA-27r3-jxmh-p828`）。
+  - `proxy-addr`: 升級至 `2.0.8`，修復 IPv4-mapped IPv6 信任子網 IP 偽造漏洞（`GHSA-jqcg-44mw-7w3h` / Critical）。
+  - `qs`: 升級至 `6.16.2`，修復陣列限制繞過、未捕獲異常 DoS 與 isBuffer 控制漏洞（`GHSA-4mjr-xmp4-gh2g`, `GHSA-x5fp-wj9c-mxmx`, `GHSA-6pq8-jhm2-2vcw`）。
+  - `follow-redirects`: 升級至 `1.16.2`，修復陣列標頭跨來源憑證繞過與正則轉義漏洞（`GHSA-8r9p-f939-6h3c`, `GHSA-q3jh-wrc6-jgq8`）。
+- **ChromaDB 安全性評估與管理**:
+  - 針對 `GHSA-2wm9-hf6c-p5cr` 與 `GHSA-36p7-vc44-83pf`（僅影響 ChromaDB 多租戶 HTTP 遠端服務與 Hugging Face 遠端程式碼載入），由於本專案僅以本機嵌入式 `PersistentClient` 模式讀取 SQLite 食譜向量，無任何對外開放的 ChromaDB API 服務與遠端程式碼執行路徑，已標記為可接受風險（Tolerable Risk）。
+- **稽核結果**:
+  - `npm audit` 達成 0 漏洞。
+
 ## [1.9.1] - 2026-10-25
 
 ### 🛡️ Security & Runtime Upgrade (Node.js 26.12.1 Security Hardening)

@@ -33,6 +33,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+skills/
 
 # 日誌
 logs/
