@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-11-10
+
+### 🚀 Added & High-Availability LLM Architecture
+- **獨立 LLM 智慧編排器 (`llm_helper.js`)**:
+  - 全新實作 4-Tier 容錯降級架構（Tier 1 Primary `llm.aiurl.tw` (`group/talk`) -> Tier 2 Google Gemini 官方端點 -> Tier 3 Groq 超高速推論 -> Tier 4 自訂端點）。
+  - **智慧熔斷器 (Circuit Breaker Pattern)**：支援 `CLOSED`、`OPEN`、`HALF_OPEN` 狀態機，當端點連續失敗次數達閥值（預設 2 次）自動觸發熔斷冷卻（預設 45s）。
+  - **致命錯誤快速熔斷隔離 (Fatal Fast-Circuit)**：針對 `insufficient_user_quota`（額度用盡）與 `invalid_api_key`（無效金鑰）錯誤，實施長達 10 分鐘的隔離，避免每次請求都重複耗時撞擊故障端點。
+  - **防驚群零延遲 Bypass 分流 (Anti-Thundering Herd Bypass)**：處於熔斷期間的端點由排程器直接 0ms 略過，併發流量毫無等待直達健康端點，徹底根除併發雷擊與延遲雪崩。
+  - **隨機抖動退避 (Full Jittered Backoff)**：模型切換與 Failover 期間加入 100ms~300ms 隨機抖動延遲，離散化併發流量，消除下游端點 429 尖峰。
+  - **請求超時防護 (Per-Call Timeout)**：支援 `LLM_TIMEOUT_MS`（預設 15 秒）主動超時控制，避免 LINE Webhook 因等候逾時而發起重複 Webhook 重試風暴。
+  - **Node.js 26 相容性修復**：修正高版本 Node 下 node-fetch gzip stream 提早結束問題（`Accept-Encoding: identity`）。
+  - **徹底移除過期 Provider**：完全清除 `nen.com.tw` 所有引用，第一順位全面接入 `https://llm.aiurl.tw/v1` (`group/talk`)。
+- **全面啟用 Google Gemini 官方在線現役模型清單（實測查證）**:
+  - 經由 Google Generative Language API 官方端點即時查證，全面剔除已過期或被官方廢止之舊型號（`gemini-1.5-flash`, `gemini-2.0-flash`, `gemini-2.0-flash-exp` 等）。
+  - 全面升級為 2026 現役在線之旗艦 Flash 系列矩陣：`gemini-2.5-flash`（主力）、`gemini-2.5-flash-lite`（亞秒級推論）。
+  - 同步更新語音 ASR 轉錄模型為 `gemini-2.5-flash`，徹底終結舊實驗模型失效問題。
+- **新增 Groq 高可用候選模型清單**:
+  - 加入 `qwen/qwen3.8-27b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`。
+- **即時監控 API**:
+  - 新增 `/api/circuit-status` 路由，並在 `/health` 端點輸出 `llmCircuits` 即時健康與熔斷狀態。
+- **自動化單元測試 (`test/llm_helper.test.js`)**:
+  - 8 項完整測試案例（致命錯誤檢測、Jitter 邊界、熔斷狀態轉移、真實 Failover 與 Bypass 驗證），100% 整合至 `npm test`。
+
 ## [1.9.2] - 2026-11-03
 
 ### 🛡️ Security & Dependabot Vulnerability Resolution

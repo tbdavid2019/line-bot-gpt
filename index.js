@@ -20,6 +20,7 @@ const sessionHelper = require('./session_helper')
 const servicesHelper = require('./services_helper')
 const securityHelper = require('./security_helper')
 const magikaHelper = require('./magika_helper')
+const llmHelper = require('./llm_helper')
 
 // 安全回覆函數：優先使用 replyMessage，若逾時或失敗自動降級為 pushMessage，保證訊息 100% 抵達使用者
 async function safeReply(event, messages) {
@@ -62,91 +63,23 @@ function getFileExtensionFromMimeType(mimeType) {
   return mimeToExt[mimeType] || 'jpg';
 }
 
-// 初始化主要 LLM 客戶端 (Primary: nen.com.tw / gpt-5.6-luna)
-const primaryKey = process.env.OPEN_AI_LINE_SECRET || process.env.OPENAI_API_KEY;
-const primaryLlmClient = primaryKey ? new OpenAI({
-  apiKey: primaryKey,
-  baseURL: process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'
-}) : null;
-
-// 初始化 Google Gemini LLM 客戶端 (Tier 2: 百萬級 Token Context / 支援 Tool Calling / 高可用)
-const geminiKey = process.env.GEMINI_API_KEY || process.env.FALLBACK_IMAGE_API_KEY;
-const geminiLlmClient = geminiKey ? new OpenAI({
-  apiKey: geminiKey,
-  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
-}) : null;
-
-// 初始化備用 LLM 客戶端 (Tier 3: Groq / openai/gpt-oss-20b)
-const fallbackKey = process.env.FALLBACK_LLM_KEY || process.env.ASR_API_GROQ_KEY;
-const fallbackLlmClient = fallbackKey ? new OpenAI({
-  apiKey: fallbackKey,
-  baseURL: process.env.FALLBACK_LLM_BASE_PATH || 'https://api.groq.com/openai/v1'
-}) : null;
+// 初始化 LLM 客戶端與智慧熔斷編排器 (由 llmHelper 統一架構管理)
+const {
+  primaryClient: primaryLlmClient,
+  geminiClient: geminiLlmClient,
+  groqClient: fallbackLlmClient,
+  customClient
+} = llmHelper.initClients();
 
 // 相容舊有 openai 參考
-const openai = primaryLlmClient || geminiLlmClient || fallbackLlmClient;
+const openai = primaryLlmClient || geminiLlmClient || fallbackLlmClient || customClient;
 
 // 多輪 Agentic Tool Calling 最大循環上限 (預設 10 輪)
 const MAX_AGENT_TURNS = parseInt(process.env.MAX_AGENT_TURNS || '10', 10);
 
-// 統一 LLM Chat Completion 呼叫函數（具備 3-Tier 自動 Failover）
+// 統一 LLM Chat Completion 呼叫函數（具備 4-Tier 智慧熔斷器、防驚群抖動退避與零延遲分流）
 async function createChatCompletion(params) {
-  // 1. 優先嘗試主要端點 (nen.com.tw / gpt-5.6-luna / deepseek-v4-flash)
-  if (primaryLlmClient) {
-    try {
-      const primaryModel = process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
-      const completion = await primaryLlmClient.chat.completions.create({
-        ...params,
-        model: primaryModel
-      });
-      return completion;
-    } catch (primaryErr) {
-      console.warn(`⚠️ 主要 LLM 呼叫失敗: ${primaryErr.message}，自動切換至 Google Gemini 端點...`);
-    }
-  }
-
-  // 2. 切換至 Google Gemini 官方 OpenAI 相容端點 (Gemini 2.5 Flash / 百萬 Token Context / 零限額崩潰)
-  if (geminiLlmClient) {
-    const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-    for (const model of geminiModels) {
-      try {
-        console.log(`🤖 使用 Google Gemini LLM 端點 (${model} @ Google)...`);
-        const completion = await geminiLlmClient.chat.completions.create({
-          ...params,
-          model: model
-        });
-        return completion;
-      } catch (geminiErr) {
-        console.warn(`⚠️ Gemini 模型 [${model}] 呼叫失敗 (${geminiErr.message})，自動嘗試下一個模型...`);
-      }
-    }
-  }
-
-  // 3. 切換至 Groq 備用端點 (Groq 多模型自動輪替 Failover 支援)
-  if (fallbackLlmClient) {
-    const candidateModels = [
-      process.env.FALLBACK_LLM_MODEL || 'openai/gpt-oss-20b',
-      'qwen/qwen3.8-27b',
-      'openai/gpt-oss-120b'
-    ];
-    let lastError = null;
-    for (const model of candidateModels) {
-      try {
-        console.log(`🤖 使用 Groq 備用 LLM 端點 (${model} @ Groq)...`);
-        const completion = await fallbackLlmClient.chat.completions.create({
-          ...params,
-          model: model
-        });
-        return completion;
-      } catch (fallbackErr) {
-        console.warn(`⚠️ Groq 模型 [${model}] 呼叫失敗 (${fallbackErr.message})，自動嘗試下一個候選模型...`);
-        lastError = fallbackErr;
-      }
-    }
-    if (lastError) throw lastError;
-  }
-
-  throw new Error('未設定任何可用的 LLM API Key (OPEN_AI_LINE_SECRET / GEMINI_API_KEY / FALLBACK_LLM_KEY)');
+  return await llmHelper.createChatCompletion(params);
 }
 
 // 用戶多輪對話歷史記憶 (由 sessionHelper 提供 7 天長效 Session 與磁碟持久化)
@@ -299,7 +232,7 @@ async function transcribeAudioWithGemini(audioBuffer) {
 
     console.log('🎤 使用 Gemini ASR 轉錄音訊...');
     const response = await genAI.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: process.env.GEMINI_ASR_MODEL || "gemini-2.5-flash",
       contents: {
         parts: [
           {
@@ -419,13 +352,13 @@ function extractImageBufferFromResponse(content) {
   return null;
 }
 
-// 核心多端點 AI 圖片生成 (Primary: nen.com.tw / gemini-3.1-flash-image -> Fallback: Google REST API)
+// 核心多端點 AI 圖片生成 (Primary: llm.aiurl.tw -> Fallback: Google REST API)
 async function generateImageBufferWithAi(prompt) {
-  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://llm.aiurl.tw/v1'}/chat/completions`;
   const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-  // 1. 優先嘗試 Primary (nen.com.tw)
+  // 1. 優先嘗試 Primary (llm.aiurl.tw)
   try {
     console.log(`🎨 嘗試主要圖片生成端點 (${primaryModel} @ ${primaryUrl})...`);
     const res = await fetch(primaryUrl, {
@@ -498,12 +431,12 @@ async function generateImageBufferWithAi(prompt) {
 
 // 核心多端點 AI 圖片編輯
 async function editImageBufferWithAi(imageBuffer, editPrompt) {
-  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://llm.aiurl.tw/v1'}/chat/completions`;
   const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const base64Img = imageBuffer.toString('base64');
 
-  // 1. 優先嘗試 Primary (nen.com.tw)
+  // 1. 優先嘗試 Primary (llm.aiurl.tw)
   try {
     console.log(`✏️ 嘗試主要圖片編輯端點 (${primaryModel} @ ${primaryUrl})...`);
     const res = await fetch(primaryUrl, {
@@ -596,10 +529,10 @@ async function analyzeImageWithGemini(imageBuffer, prompt, userId) {
   const base64Img = imageBuffer.toString('base64');
   const userPrompt = prompt || '請詳細描述這張圖片的內容，包括主要物體、場景、顏色、氛圍等';
 
-  // 1. 優先嘗試 Primary Vision (gpt-5.6-luna @ nen.com.tw)
-  const primaryUrl = `${process.env.OPEN_AI_BASE_PATH || 'https://nen.com.tw/v1'}/chat/completions`;
+  // 1. 優先嘗試 Primary Vision (llm.aiurl.tw)
+  const primaryUrl = `${process.env.OPEN_AI_BASE_PATH || 'https://llm.aiurl.tw/v1'}/chat/completions`;
   const primaryKey = process.env.OPEN_AI_LINE_SECRET;
-  const primaryModel = process.env.GEMINI_VISION_MODEL || process.env.OPEN_AI_MODEL || 'gpt-5.6-luna';
+  const primaryModel = process.env.GEMINI_VISION_MODEL || process.env.OPEN_AI_MODEL || 'group/talk';
 
   try {
     console.log(`🔍 嘗試主要 Vision 分析 (${primaryModel} @ ${primaryUrl})...`);
@@ -1139,7 +1072,16 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.2.1'
+    version: '1.10.0',
+    llmCircuits: llmHelper.getCircuitStatus()
+  })
+})
+
+// LLM 熔斷器即時監控端點
+app.get('/api/circuit-status', (req, res) => {
+  res.status(200).json({
+    timestamp: new Date().toISOString(),
+    circuits: llmHelper.getCircuitStatus()
   })
 })
 

@@ -187,6 +187,28 @@ Bot: 🎤 您說：「講個笑話」
 - `!read <網址>` / `!讀取 <網址>` / `!2md <網址>`：直接將網址轉為 clean Markdown
   - 例：`!read https://example.com/news`
 
+### 🛡️ 4-Tier LLM 智慧熔斷器與防驚群架構 (LLM Orchestrator & Circuit Breaker)
+
+> [!IMPORTANT]
+> **杜絕重試風暴與級聯雪崩，秒級平滑容錯降級！**
+> 核心整合於 `llm_helper.js`，將所有 LLM 請求納入狀態機管理，徹底杜絕無狀態 Try-Catch 在併發流量下引發的「驚群效應 (Thundering Herd)」與連鎖崩潰：
+
+- **4-Tier 多層高可用架構**：
+  - **Tier 1 (Primary)**：OpenAI Compatible 端點（`https://llm.aiurl.tw/v1` / 模型 `group/talk`）。
+  - **Tier 2 (Gemini)**：Google Gemini 官方 OpenAI 相容端點（經實測驗證之在線現役旗艦模型：`gemini-2.5-flash`, `gemini-2.5-flash-lite`，具備百萬級 Context 與強大 Tool Calling 能力）。
+  - **Tier 3 (Groq)**：Groq 超高速推論端點（`qwen/qwen3.8-27b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-20b`）。
+  - **Tier 4 (Custom)**：可自訂任何相容 OpenAI 協定之備用服務（如官方 OpenAI、DeepSeek、自建 Ollama 等）。
+- **智慧熔斷器 (Circuit Breaker Pattern)**：
+  - 記錄各端點狀態（`CLOSED`、`OPEN`、`HALF_OPEN`），連續失敗 2 次即開啟熔斷冷卻（45 秒）。
+  - **致命錯誤快速隔離 (Fatal Fast-Circuit)**：若端點回報額度不足（`insufficient_user_quota`）或金鑰無效，立即啟動長達 10 分鐘的隔離，避免每次請求都重複耗時撞擊無法復原的端點。
+- **防驚群零延遲 Bypass 分流 (Anti-Thundering Herd Bypass)**：
+  - 熔斷隔離中的端點由排程器直接 0ms 略過，後續所有併發請求直達健康端點，杜絕連線在掛掉的伺服器上排隊 hang 住導致的超時雪崩。
+- **全抖動隨機退避 (Full Jittered Backoff)**：
+  - 模型切換與容錯降級時注入 100ms~300ms 隨機延遲，將同批次併發請求在時間軸上平滑打散。
+- **請求超時守護與即時監控**：
+  - 單次請求超時上限（預設 15 秒），避免 LINE Webhook 超時重試造成二次重試風暴。
+  - 提供 `/api/circuit-status` 路由與 `/health` 熔斷即時狀態檢視。
+
 ### 🔬 Google Magika AI 本地檔案型態識別 (AI File Type Detection)
 
 > [!TIP]
@@ -431,16 +453,32 @@ In the `.env` file, you need to configure the following environment variables:
 
 ```bash
 # ==============================================================================
-# LLM 核心設定 (主要: Google Gemini 官方 OpenAI 相容端點 / 備用: Groq / nen.com.tw)
+# LLM 核心設定 (4-Tier 高可用架構，支援智慧熔斷與防驚群 Jitter 退避)
 # ==============================================================================
-OPEN_AI_BASE_PATH=https://generativelanguage.googleapis.com/v1beta/openai/
-OPEN_AI_MODEL=gemini-flash-latest
-OPEN_AI_LINE_SECRET=AIzaSy...your_gemini_api_key
+# Tier 1: 主要端點 (OpenAI API Compatible - llm.aiurl.tw)
+OPEN_AI_BASE_PATH=https://llm.aiurl.tw/v1
+OPEN_AI_MODEL=group/talk
+OPEN_AI_LINE_SECRET=your_primary_llm_key
 
-# 備用 LLM 設定 (Groq)
+# Tier 2: Google Gemini 官方 OpenAI 相容端點 (百萬級 Context / 支援 Tool Calling)
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_LLM_MODEL=gemini-2.5-flash
+
+# Tier 3: Groq 超高速推論端點
 FALLBACK_LLM_BASE_PATH=https://api.groq.com/openai/v1
-FALLBACK_LLM_MODEL=openai/gpt-oss-20b
+FALLBACK_LLM_MODEL=qwen/qwen3.8-27b
 FALLBACK_LLM_KEY=your_groq_api_key
+
+# Tier 4: 自訂備用端點 (可選：官方 OpenAI、DeepSeek、Ollama 等)
+FALLBACK_CUSTOM_BASE_PATH=https://api.openai.com/v1
+FALLBACK_CUSTOM_KEY=
+FALLBACK_CUSTOM_MODEL=gpt-4o-mini
+
+# LLM 智慧熔斷器與防驚群參數
+LLM_CIRCUIT_FAIL_THRESHOLD=2
+LLM_CIRCUIT_COOLDOWN_MS=45000
+LLM_FATAL_COOLDOWN_MS=600000
+LLM_TIMEOUT_MS=15000
 
 # Session 與長效記憶設定 (預設 7 天超時自動開立新話題)
 SESSION_TTL_DAYS=7
@@ -449,17 +487,17 @@ SESSION_TTL_DAYS=7
 MAX_AGENT_TURNS=10
 
 # ==============================================================================
-# AI 圖片生成與編輯設定 (主要: nen.com.tw / 備用: Google Gemini API)
+# AI 圖片生成與視覺設定 (Google REST API / 多端點容錯)
 # ==============================================================================
-IMAGE_API_BASE_PATH=https://nen.com.tw/v1
-GEMINI_MODEL=gemini-3.1-flash-image
+IMAGE_API_BASE_PATH=https://llm.aiurl.tw/v1
+GEMINI_MODEL=gemini-2.5-flash
 IMAGE_API_KEY=your_image_api_key
 
 # 備用圖片模型與視覺設定 (Google REST API)
-GEMINI_API_KEY=your_gemini_api_key
 FALLBACK_IMAGE_API_KEY=your_gemini_api_key
-FALLBACK_GEMINI_MODEL=gemini-3.1-flash-image
-GEMINI_VISION_MODEL=gpt-5.6-luna
+FALLBACK_GEMINI_MODEL=gemini-2.5-flash
+GEMINI_VISION_MODEL=gemini-2.5-flash
+GEMINI_ASR_MODEL=gemini-2.5-flash
 
 # 圖片功能開關
 ENABLE_IMAGE_ANALYSIS=true
