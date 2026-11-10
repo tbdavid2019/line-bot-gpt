@@ -56,7 +56,7 @@ Whenever any feature, tool, API endpoint, configuration, or bugfix is implemente
 - **Multi-Architecture Builds**: All GitHub Actions workflows (`.github/workflows/docker-publish.yml`) MUST include `docker/setup-qemu-action@v3` and `platforms: linux/amd64,linux/arm64`.
 - **Watchtower Automated Deployment**:
   - Push changes to `main` branch -> triggers GitHub Actions build -> pushes multi-arch image to Docker Hub `tbdavid2019/line-bot-gpt:latest`.
-  - Watchtower on `ubuntu@dns.glsoft.ai` automatically polls Docker Hub every 60s, updates running containers, cleans dangling images, and maintains high availability.
+  - Watchtower on `ubuntu@dns.glsoft.ai` automatically polls Docker Hub every 1 hour (3600s), updates running containers, cleans dangling images, and maintains high availability.
   - Monitored services: `line-bot-gpt`, `stirling-pdf` (port 8822), `ai-hedge-fund-api`.
 
 ---
