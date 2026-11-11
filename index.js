@@ -352,45 +352,96 @@ function extractImageBufferFromResponse(content) {
   return null;
 }
 
-// 核心多端點 AI 圖片生成 (Primary: llm.aiurl.tw -> Fallback: Google REST API)
+// 核心多端點 AI 圖片生成 (Primary: 標準 OpenAI /images/generations -> Secondary: /chat/completions -> Fallback: Google REST API)
 async function generateImageBufferWithAi(prompt) {
-  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://llm.aiurl.tw/v1'}/chat/completions`;
+  const imageBasePath = (process.env.IMAGE_API_BASE_PATH || process.env.OPEN_AI_BASE_PATH || 'https://llm.aiurl.tw/v1').replace(/\/+$/, '');
   const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
   const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-  // 1. 優先嘗試 Primary (llm.aiurl.tw)
-  try {
-    console.log(`🎨 嘗試主要圖片生成端點 (${primaryModel} @ ${primaryUrl})...`);
-    const res = await fetch(primaryUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${primaryKey}`
-      },
-      body: JSON.stringify({
-        model: primaryModel,
-        messages: [{ role: 'user', content: `Generate an image: ${prompt}` }],
-        modalities: ['image', 'text']
-      }),
-      signal: AbortSignal.timeout(60000)
-    });
+  // 1. 優先嘗試標準 OpenAI /images/generations 端點 (如 codex/gpt-image-2 等，最高畫質與相容性)
+  if (primaryKey) {
+    try {
+      const genEndpoint = `${imageBasePath}/images/generations`;
+      console.log(`🎨 嘗試標準圖片生成端點 (${genEndpoint})...`);
+      const res = await fetch(genEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${primaryKey}`
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          n: 1,
+          size: '1024x1024',
+          response_format: 'b64_json'
+        }),
+        signal: AbortSignal.timeout(60000)
+      });
 
-    if (res.ok) {
-      const json = await res.json();
-      const content = json.choices?.[0]?.message?.content || '';
-      const extracted = extractImageBufferFromResponse(content);
-      if (extracted && extracted.buffer.length > 1000) {
-        console.log(`✅ 主要端點圖片生成成功，大小: ${extracted.buffer.length} bytes`);
-        return extracted;
+      if (res.ok) {
+        const json = await res.json();
+        const b64 = json.data?.[0]?.b64_json;
+        if (b64) {
+          const buffer = Buffer.from(b64, 'base64');
+          console.log(`✅ 標準端點圖片生成成功 (b64_json)，大小: ${buffer.length} bytes`);
+          return {
+            mimeType: json.data?.[0]?.mime_type || 'image/png',
+            buffer: buffer
+          };
+        }
+        const imgUrl = json.data?.[0]?.url;
+        if (imgUrl) {
+          const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(30000) });
+          if (imgRes.ok) {
+            const arrBuf = await imgRes.arrayBuffer();
+            const buffer = Buffer.from(arrBuf);
+            console.log(`✅ 標準端點圖片下載成功 (URL)，大小: ${buffer.length} bytes`);
+            return {
+              mimeType: imgRes.headers.get('content-type') || 'image/png',
+              buffer: buffer
+            };
+          }
+        }
+      } else {
+        console.warn(`⚠️ 標準圖片端點回應 HTTP ${res.status}`);
       }
-    } else {
-      console.warn(`⚠️ 主要端點圖片生成失敗 HTTP ${res.status}`);
+    } catch (stdErr) {
+      console.warn(`⚠️ 標準圖片生成失敗: ${stdErr.message}，嘗試相容端點...`);
     }
-  } catch (primaryErr) {
-    console.warn(`⚠️ 主要端點圖片生成錯誤: ${primaryErr.message}，切換備用端點...`);
+
+    // 2. 次要嘗試 /chat/completions 格式 (部分代理商專屬封裝)
+    try {
+      const chatEndpoint = `${imageBasePath}/chat/completions`;
+      console.log(`🎨 嘗試 Chat 相容圖片生成端點 (${primaryModel} @ ${chatEndpoint})...`);
+      const res = await fetch(chatEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${primaryKey}`
+        },
+        body: JSON.stringify({
+          model: primaryModel,
+          messages: [{ role: 'user', content: `Generate an image: ${prompt}` }],
+          modalities: ['image', 'text']
+        }),
+        signal: AbortSignal.timeout(60000)
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const content = json.choices?.[0]?.message?.content || '';
+        const extracted = extractImageBufferFromResponse(content);
+        if (extracted && extracted.buffer.length > 1000) {
+          console.log(`✅ Chat 端點圖片生成成功，大小: ${extracted.buffer.length} bytes`);
+          return extracted;
+        }
+      }
+    } catch (chatErr) {
+      console.warn(`⚠️ Chat 相容圖片生成錯誤: ${chatErr.message}，切換備用端點...`);
+    }
   }
 
-  // 2. 備用 Fallback (Google REST API gemini-3.1-flash-image)
+  // 3. 備用 Fallback (Google REST API)
   const fallbackKey = process.env.FALLBACK_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
   const fallbackModel = process.env.FALLBACK_GEMINI_MODEL || 'gemini-3.1-flash-image';
   const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${fallbackKey}`;
