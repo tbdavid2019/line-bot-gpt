@@ -482,56 +482,64 @@ async function generateImageBufferWithAi(prompt) {
 
 // 核心多端點 AI 圖片編輯
 async function editImageBufferWithAi(imageBuffer, editPrompt) {
-  const primaryUrl = `${process.env.IMAGE_API_BASE_PATH || 'https://llm.aiurl.tw/v1'}/chat/completions`;
+  const imageBasePath = (process.env.IMAGE_API_BASE_PATH || process.env.OPEN_AI_BASE_PATH || 'https://llm.aiurl.tw/v1').replace(/\/+$/, '');
   const primaryKey = process.env.IMAGE_API_KEY || process.env.OPEN_AI_LINE_SECRET;
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const base64Img = imageBuffer.toString('base64');
+  const primaryModel = process.env.IMAGE_MODEL || 'codex/gpt-image-2';
 
-  // 1. 優先嘗試 Primary (llm.aiurl.tw)
+  // 1. 優先嘗試 Primary (POST /v1/images/edits)
   try {
-    console.log(`✏️ 嘗試主要圖片編輯端點 (${primaryModel} @ ${primaryUrl})...`);
-    const res = await fetch(primaryUrl, {
+    console.log(`✏️ 嘗試主要圖片編輯端點 (/v1/images/edits @ ${imageBasePath})...`);
+    const form = new FormData();
+    const blob = new Blob([imageBuffer], { type: 'image/png' });
+    form.append('image', blob, 'input_image.png');
+    form.append('prompt', editPrompt);
+    if (primaryModel) {
+      form.append('model', primaryModel);
+    }
+
+    const res = await fetch(`${imageBasePath}/images/edits`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         'Authorization': `Bearer ${primaryKey}`
       },
-      body: JSON.stringify({
-        model: primaryModel,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: `Edit this image: ${editPrompt}. Keep the main subject but ${editPrompt}` },
-              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Img}` } }
-            ]
-          }
-        ],
-        modalities: ['image', 'text']
-      }),
+      body: form,
       signal: AbortSignal.timeout(60000)
     });
 
     if (res.ok) {
-      const json = await res.json();
-      const content = json.choices?.[0]?.message?.content || '';
-      const extracted = extractImageBufferFromResponse(content);
-      if (extracted && extracted.buffer.length > 1000) {
-        console.log(`✅ 主要端點圖片編輯成功，大小: ${extracted.buffer.length} bytes`);
-        return extracted;
+      const data = await res.json();
+      const first = data.data?.[0];
+      if (first?.b64_json) {
+        const buffer = Buffer.from(first.b64_json, 'base64');
+        console.log(`✅ 主要端點圖片編輯成功 (b64)，大小: ${buffer.length} bytes`);
+        return { mimeType: 'image/png', buffer };
       }
+      if (first?.url) {
+        console.log(`📥 下載已編輯圖片 URL: ${first.url}`);
+        const dlRes = await fetch(first.url, { signal: AbortSignal.timeout(30000) });
+        if (dlRes.ok) {
+          const ab = await dlRes.arrayBuffer();
+          const buffer = Buffer.from(ab);
+          console.log(`✅ 主要端點圖片編輯成功 (url)，大小: ${buffer.length} bytes`);
+          return { mimeType: 'image/png', buffer };
+        }
+      }
+    } else {
+      const errText = await res.text().catch(() => '');
+      console.warn(`⚠️ 主要圖片編輯端點 HTTP ${res.status}: ${errText.substring(0, 200)}`);
     }
   } catch (primaryErr) {
     console.warn(`⚠️ 主要端點圖片編輯錯誤: ${primaryErr.message}，切換備用端點...`);
   }
 
-  // 2. 備用 Fallback (Google REST API gemini-3.1-flash-image)
+  // 2. 備用 Fallback (Google REST API)
   const fallbackKey = process.env.FALLBACK_IMAGE_API_KEY || process.env.GEMINI_API_KEY;
-  const fallbackModel = process.env.FALLBACK_GEMINI_MODEL || 'gemini-3.1-flash-image';
+  const fallbackModel = process.env.FALLBACK_GEMINI_MODEL || 'gemini-2.5-flash';
   const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${fallbackKey}`;
 
   try {
     console.log(`✏️ 嘗試備用圖片編輯端點 (${fallbackModel} @ Google REST API)...`);
+    const base64Img = imageBuffer.toString('base64');
     const res = await fetch(fallbackUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.10.0] - 2026-11-10
 
 ### 🚀 Added & High-Availability LLM Architecture
+- **AI 圖片生成與編輯管線升級 (Standard Image Generations & Edits Architecture)**:
+  - 升級 `generateImageBufferWithAi` 接入標準 OpenAI `POST /v1/images/generations` 端點，以 `codex/gpt-image-2` 產出高品質高解析度圖片（實測 2.39MB），支援 `b64_json` 及 URL 下載雙重相容。
+  - 升級 `editImageBufferWithAi` 接入標準 OpenAI `POST /v1/images/edits` 端點，以 Node.js 原生 `FormData` 與 `Blob` 進行 Multipart 圖片編輯（模型：`codex/gpt-image-2`），並具備 Nginx 1MB 負載超限自動降級保護。
+  - 完善多模態視覺辨識（Vision）機制：第一順位使用 `llm.aiurl.tw` 的 `group/talk`（或 `antigravity/gemini-2.5-flash`），備用端點無縫降級至 Google Generative Language REST API (`gemini-2.5-flash`)。
+  - 新增 `test/image_test.js` 整合測試套件（文字生圖、圖片編輯、主端點 Vision、備用端點 Vision），並註冊於 `package.json` (`npm run test-image`)。
+- **Watchtower 自動部署升級**:
+  - 替換停止維護的舊版 Watchtower，全面切換至 `nickfedor/watchtower:latest`。
+  - 修正 Docker Engine 25.0 API 相容版本為 `DOCKER_API_VERSION=1.44`。
+  - 依使用者指示將輪詢間隔設定為 3600 秒（1 小時），避免過度頻繁輪詢消耗主機資源。
 - **獨立 LLM 智慧編排器 (`llm_helper.js`)**:
   - 全新實作 4-Tier 容錯降級架構（Tier 1 Primary `llm.aiurl.tw` (`group/talk`) -> Tier 2 Google Gemini 官方端點 -> Tier 3 Groq 超高速推論 -> Tier 4 自訂端點）。
   - **智慧熔斷器 (Circuit Breaker Pattern)**：支援 `CLOSED`、`OPEN`、`HALF_OPEN` 狀態機，當端點連續失敗次數達閥值（預設 2 次）自動觸發熔斷冷卻（預設 45s）。

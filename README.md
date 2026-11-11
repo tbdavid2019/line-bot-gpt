@@ -487,9 +487,10 @@ SESSION_TTL_DAYS=7
 MAX_AGENT_TURNS=10
 
 # ==============================================================================
-# AI 圖片生成與視覺設定 (Google REST API / 多端點容錯)
+# AI 圖片生成與視覺設定 (Standard OpenAI Image API / Google 多端點容錯)
 # ==============================================================================
 IMAGE_API_BASE_PATH=https://llm.aiurl.tw/v1
+IMAGE_MODEL=codex/gpt-image-2
 GEMINI_MODEL=gemini-2.5-flash
 IMAGE_API_KEY=your_image_api_key
 
