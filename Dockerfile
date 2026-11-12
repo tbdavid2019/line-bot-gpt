@@ -1,5 +1,5 @@
 # 使用 Node.js 26 Slim (Debian based) 以獲得更好的安全性與效能
-FROM node:26.12.1-slim
+FROM node:26.13.1-slim
 
 # 設置工作目錄
 WORKDIR /usr/src/app
