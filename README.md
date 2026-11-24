@@ -426,8 +426,10 @@ Bot: ✨ 即將為您生成圖片...
    
    Install dependencies:
    ```bash
-   npm install
+   npm ci
    ```
+
+   `package-lock.json` 將 `@google-cloud/storage` 使用的 `fast-xml-parser` 固定在已修補的 `5.12.1`，修復 `CVE-2026-126066`。使用 `npm ci` 可依鎖檔安裝相同版本。
 
 3. 複製並修改環境變數文件：
    
