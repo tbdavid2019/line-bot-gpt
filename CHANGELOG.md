@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🛡️ Security
+- 將 `@google-cloud/storage` 帶入的 `fast-xml-parser` 鎖定版本由 `5.11.1` 更新至已修補的 `5.12.1`，修復 `CVE-2026-126066` / `GHSA-474x-hrwr-fgx4`。
+
 ## [1.10.1] - 2026-11-12
 
 ### 🛡️ Security & Runtime Upgrade (Node.js 26.13.1 Security Hardening)
